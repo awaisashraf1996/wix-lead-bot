@@ -2583,7 +2583,7 @@ class SettingsPage(Page):
                                                "job_title", "whatsapp")}
         for i, (key, label) in enumerate((("proof_line", "Proof line"), ("portfolio_url", "Portfolio link"),
                                           ("offer", "Current offer"), ("offer_until", "Offer ends (YYYY-MM-DD)"),
-                                          ("job_title", "Your title"), ("whatsapp", "WhatsApp (blank = hide)"))):
+                                          ("job_title", "Your title"), ("whatsapp", "WhatsApp number (only the link is shown)"))):
             tk.Label(f, text=label, bg=CARD).grid(row=i + 1, column=0, sticky="w", pady=4)
             ttk.Entry(f, textvariable=self.ed[key], width=70).grid(row=i + 1, column=1, sticky="w")
         tk.Label(f, text="The offer line is added to follow-ups until the end date, then disappears by itself.",
@@ -2601,10 +2601,18 @@ class SettingsPage(Page):
                           (5, "Check-back"), (0, "Answers to replies")):
             v = self.brand_vars[step] = tk.BooleanVar()
             ttk.Checkbutton(bf, text=lab, variable=v).pack(side="left", padx=(0, 10))
+        tk.Label(f, text="Email colours", bg=CARD).grid(row=10, column=0, sticky="w", pady=(12, 0))
+        tf = tk.Frame(f, bg=CARD)
+        tf.grid(row=10, column=1, sticky="w", pady=(12, 0))
+        self.etheme = tk.StringVar(value="light")
+        ttk.Radiobutton(tf, text="White (recommended: reads well everywhere)", value="light",
+                        variable=self.etheme).pack(side="left", padx=(0, 14))
+        ttk.Radiobutton(tf, text="Dark (navy, premium look)", value="dark", variable=self.etheme).pack(side="left")
         bb = tk.Frame(f, bg=CARD)
-        bb.grid(row=10, column=1, sticky="w", pady=(14, 0))
+        bb.grid(row=11, column=1, sticky="w", pady=(14, 0))
         Btn(bb, text="Save", style="Primary.TButton", command=self.save_design).pack(side="left")
-        Btn(bb, text="👁  Preview a follow-up", command=self.preview_design).pack(side="left", padx=8)
+        Btn(bb, text="👁  Preview first email", command=lambda: self.preview_design(1)).pack(side="left", padx=8)
+        Btn(bb, text="👁  Preview a follow-up", command=lambda: self.preview_design(3)).pack(side="left")
 
         # --- templates
         t3 = tk.Frame(nb, bg=CARD)
@@ -2689,6 +2697,7 @@ class SettingsPage(Page):
         self.testi.insert("1.0", "\n".join(f"{q} | {n}" for q, n in (s.get("testimonials") or [])))
         for step, v in self.brand_vars.items():
             v.set(step in (s.get("branded_steps") or []))
+        self.etheme.set(s.get("email_theme") or "light")
         self.load_tpl()
         self.fill_supp()
 
@@ -2809,18 +2818,19 @@ class SettingsPage(Page):
                 tl.append([q.strip().strip('"“”'), n.strip() or "Client"])
         s["testimonials"] = tl
         s["branded_steps"] = [k for k, v in self.brand_vars.items() if v.get()]
+        s["email_theme"] = self.etheme.get()
         self.app.cfg.set("outreach", s)
         self.app.cfg.save()
         if not quiet:
             self.app.toast("Saved")
 
-    def preview_design(self):
+    def preview_design(self, step=3):
         self.save_design(quiet=True)
         st = O.settings(self.app.cfg)
         lead = next(iter(self.db.lead_records()), {"domain": "example.com", "name": "Bright Smile Dental",
                                                     "final_url": "https://example.com", "category": "dentist"})
-        subj, body = O.templates(self.app.cfg)[3]
-        msg = {"step": 3, "domain": lead["domain"], "to_addr": O.best_email(lead) or "owner@example.com",
+        subj, body = O.templates(self.app.cfg)[step]
+        msg = {"step": step, "domain": lead["domain"], "to_addr": O.best_email(lead) or "owner@example.com",
                "subject": O._fill(subj, lead, st), "body": O._fill(body, lead, st) + O._fill(O.FOOTER, lead, st)}
         open_url("file:///" + O.preview_file(self.app.cfg, msg, self.db).replace(os.sep, "/"))
 

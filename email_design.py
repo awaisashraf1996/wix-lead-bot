@@ -15,11 +15,21 @@ from __future__ import annotations
 import html
 import re
 
-NAVY, TEAL, RED, MUTED, LINE, SOFT = "#16212D", "#1E91A8", "#E8222B", "#6B7785", "#E3E8EF", "#F4F7FA"
+NAVY, TEAL, RED = "#16212D", "#1E91A8", "#E8222B"
+THEMES = {
+    "light": {"txt": "#16212D", "head": "#16212D", "card": "#FFFFFF", "page": "#EEF2F6", "muted": "#6B7785",
+              "line": "#E3E8EF", "soft": "#F4F7FA", "foot": "#F7F9FB", "offer_bg": "#FFF4F4", "offer_line": "#F7C9CB",
+              "x_bg": "#FDE8E9", "link": "#1E91A8", "scheme": "light only"},
+    "dark": {"txt": "#E6EDF3", "head": "#0B1118", "card": "#16212D", "page": "#0E151D", "muted": "#9AA8B6",
+             "line": "#2A3846", "soft": "#1D2A37", "foot": "#121B25", "offer_bg": "#3A1E23", "offer_line": "#6B2C33",
+             "x_bg": "#4A2027", "link": "#6FD0E3", "scheme": "dark only"},
+}
+P = dict(THEMES["light"])
 ASSET = "https://raw.githubusercontent.com/awaisashraf1996/wix-lead-bot/main/assets/"
 DEFAULT_LOGO_DARK = ASSET + "logo_login_dark.png"      # white text, for the navy header
 DEFAULT_LOGO_LIGHT = ASSET + "logo_login_t.png"        # navy text, for white backgrounds
 DEFAULT_MARK = ASSET + "mark64_t.png"
+DEFAULT_MARK_DARK = ASSET + "mark64_dark.png"
 DEFAULT_WORK = [
     ["Cruise Cali", "Luxury travel", "https://nadevelopers.com/wp-content/uploads/2026/11/cruise-cali-cover-768x409.jpg"],
     ["Great Details Auto Care", "Auto repair", "https://nadevelopers.com/wp-content/uploads/2026/11/great-details-auto-care-cover-768x409.jpg"],
@@ -58,7 +68,7 @@ def _linkify(text: str) -> str:
         out.append(html.escape(text[pos:m.start()]))
         url = m.group(1)
         href = url if url.startswith("http") else "https://" + url
-        out.append(f'<a href="{html.escape(href)}" style="color:{TEAL};text-decoration:none;font-weight:600">'
+        out.append(f'<a href="{html.escape(href)}" style="color:{P["link"]};text-decoration:none;font-weight:600">'
                    f'{html.escape(_nice(url))}</a>')
         pos = m.end()
     out.append(html.escape(text[pos:]))
@@ -93,30 +103,30 @@ def _paragraphs(main: str, s: dict, kind: str) -> str:
         if offer and text.strip() == offer:
             blocks.append(
                 f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:4px 0 18px 0">'
-                f'<tr><td style="background:#FFF4F4;border:1px solid #F7C9CB;border-radius:10px;padding:14px 16px;'
-                f'font-size:14px;color:{NAVY}"><span style="display:inline-block;background:{RED};color:#fff;'
+                f'<tr><td style="background:{P["offer_bg"]};border:1px solid {P["offer_line"]};border-radius:10px;padding:14px 16px;'
+                f'font-size:14px;color:{P["txt"]}"><span style="display:inline-block;background:{RED};color:#fff;'
                 f'font-size:11px;font-weight:700;letter-spacing:.6px;padding:3px 8px;border-radius:4px;'
                 f'margin-right:8px">OFFER</span>{_linkify(offer)}</td></tr></table>')
             continue
         if all(ln.lstrip().startswith(("•", "-", "*", "✗")) for ln in lines):
             rows = ""
             for i, ln in enumerate(lines):
-                sep = f"border-top:1px solid {LINE};" if i else ""
+                sep = f"border-top:1px solid {P["line"]};" if i else ""
                 rows += (f'<tr><td width="34" style="vertical-align:top;padding:12px 0 12px 14px;{sep}">'
-                         f'<div style="width:20px;height:20px;border-radius:10px;background:#FDE8E9;color:{RED};'
+                         f'<div style="width:20px;height:20px;border-radius:10px;background:{P["x_bg"]};color:{RED};'
                          f'font-size:11px;font-weight:700;text-align:center;line-height:20px">&#10005;</div></td>'
-                         f'<td style="padding:12px 14px 12px 6px;font-size:14px;line-height:1.5;color:{NAVY};{sep}">'
+                         f'<td style="padding:12px 14px 12px 6px;font-size:14px;line-height:1.5;color:{P["txt"]};{sep}">'
                          f'{_linkify(BULLET_RE.sub("", ln.strip()))}</td></tr>')
             title = ""
             if s.get("_site"):
                 speed = (f' &nbsp;·&nbsp; phone speed <b style="color:#FFB4B7">{s["_speed"]}/100</b>'
                          if s.get("_speed") is not None else "")
-                title = (f'<tr><td colspan="2" style="background:{NAVY};color:#ffffff;padding:10px 14px;'
+                title = (f'<tr><td colspan="2" style="background:{P["head"]};color:#ffffff;padding:10px 14px;'
                          f'font-size:12px;letter-spacing:.4px;border-radius:9px 9px 0 0"><b>WHAT I NOTICED</b>'
                          f' &nbsp;·&nbsp; {html.escape(_nice(s["_site"]))}{speed}</td></tr>')
             blocks.append(f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-                          f'style="margin:2px 0 18px 0;border:1px solid {LINE};border-radius:10px;'
-                          f'background:#FFFFFF">{title}{rows}</table>')
+                          f'style="margin:2px 0 18px 0;border:1px solid {P["line"]};border-radius:10px;'
+                          f'background:{P["card"]}">{title}{rows}</table>')
             continue
         if s.get("calendly") and s["calendly"] in text and len(re.findall(r"https?://", text)) == 1:
             text = re.sub(r"\s*(My calendar|Here'?s my calendar|Book here)?:?\s*" + re.escape(s["calendly"]), "", text).rstrip(" :")
@@ -137,7 +147,7 @@ def _button(s: dict, label: str = "Book a free 15-minute call") -> str:
             f'<td style="background:{RED};border-radius:8px"><a href="{html.escape(cal)}" '
             f'style="display:inline-block;padding:13px 24px;color:#ffffff;font-weight:700;text-decoration:none;'
             f'font-size:15px;{FONT}">{html.escape(label)} &rarr;</a></td></tr></table>'
-            f'<div style="font-size:12px;color:{MUTED};margin:0 0 24px 0">15 minutes on Zoom or phone '
+            f'<div style="font-size:12px;color:{P["muted"]};margin:0 0 24px 0">15 minutes on Zoom or phone '
             f'&nbsp;·&nbsp; no obligation &nbsp;·&nbsp; fixed written quote</div>')
 
 
@@ -146,9 +156,10 @@ def _b(s: dict, key: str):
     return DEFAULT_BRAND[key] if v in (None, "", []) else v
 
 
-def _socials(s: dict, size: int = 26) -> str:
+def _socials(s: dict, size: int = 26, wa_link: str = "") -> str:
     cells = ""
-    for name, url, label, col in _b(s, "socials"):
+    items = list(_b(s, "socials")) + ([["WhatsApp", wa_link, "wa", "#25D366"]] if wa_link else [])
+    for name, url, label, col in items:
         if not url:
             continue
         cells += (f'<td style="padding-right:6px"><a href="{html.escape(url)}" title="{html.escape(name)}" '
@@ -170,27 +181,29 @@ def _signature(sig_lines: list[str], s: dict) -> str:
     sign_off = ""
     if sig_lines and sig_lines[0].lower().startswith(SIGNOFFS):
         sign_off = f'<div style="margin:0 0 12px 0">{html.escape(sig_lines[0])}</div>'
-    a = f"color:{TEAL};text-decoration:none"
+    a = f"color:{P["link"]};text-decoration:none"
     lines = [f'<a href="{html.escape(site_href)}" style="{a}">{html.escape(_nice(site))}</a>']
     if email:
         lines.append(f'<a href="mailto:{html.escape(email)}" style="{a}">{html.escape(email)}</a>')
     contact2 = []
-    if wa:
+    if wa and (s.get("whatsapp_show_number") is True):
         contact2.append(f'WhatsApp <a href="{html.escape(wa_link)}" style="{a}">{html.escape(wa)}</a>')
+    elif wa:
+        contact2.append(f'<a href="{html.escape(wa_link)}" style="{a}">Chat on WhatsApp</a>')
     if s.get("calendly"):
         contact2.append(f'<a href="{html.escape(s["calendly"])}" style="{a};font-weight:600">Book a call</a>')
     badge = _b(s, "legend_badge")
     return (f'{sign_off}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-            f'style="margin:8px 0 10px 0;border-top:1px solid {LINE};padding-top:16px"><tr>'
+            f'style="margin:8px 0 10px 0;border-top:1px solid {P["line"]};padding-top:16px"><tr>'
             f'<td width="58" style="vertical-align:top;padding:16px 14px 0 0">'
             f'<img src="{html.escape(mark)}" width="52" height="52" alt="NA Developers" style="display:block;border:0"></td>'
             f'<td style="vertical-align:top;padding:16px 10px 0 14px;border-left:3px solid {TEAL};font-size:13px;'
-            f'line-height:1.6;color:{MUTED}">'
-            f'<div style="font-size:16px;font-weight:700;color:{NAVY}">{html.escape(name)}</div>'
-            f'<div style="color:{NAVY}">{html.escape(s.get("job_title") or "Founder")}, {html.escape(company)}</div>'
+            f'line-height:1.6;color:{P["muted"]}">'
+            f'<div style="font-size:16px;font-weight:700;color:{P["txt"]}">{html.escape(name)}</div>'
+            f'<div style="color:{P["txt"]}">{html.escape(s.get("job_title") or "Founder")}, {html.escape(company)}</div>'
             f'<div>{" &nbsp;·&nbsp; ".join(lines)}</div>'
             + (f'<div>{" &nbsp;·&nbsp; ".join(contact2)}</div>' if contact2 else "")
-            + f'<div style="padding-top:8px">{_socials(s)}</div></td>'
+            + f'<div style="padding-top:8px">{_socials(s, wa_link=wa_link)}</div></td>'
             + (f'<td width="74" style="vertical-align:top;padding:16px 0 0 0;text-align:right">'
                f'<img src="{html.escape(badge)}" width="70" height="70" alt="Wix Legend Partner" '
                f'style="display:inline-block;border:0"></td>' if badge else "")
@@ -204,10 +217,11 @@ def _partners(s: dict) -> str:
         for u, alt, h in _b(s, "partner_logos") if u)
     if not cells:
         return ""
-    return (f'<tr><td style="padding:16px 30px 6px 30px;border-top:1px solid {LINE}" align="center">'
-            f'<div style="font-size:11px;letter-spacing:.8px;color:{MUTED};font-weight:700;margin-bottom:10px">'
+    return (f'<tr><td style="padding:16px 30px 6px 30px;border-top:1px solid {P["line"]}" align="center">'
+            f'<div style="font-size:11px;letter-spacing:.8px;color:{P["muted"]};font-weight:700;margin-bottom:10px">'
             f'TRUSTED PARTNER &nbsp;·&nbsp; PLATFORMS WE BUILD ON</div>'
-            f'<table role="presentation" cellpadding="0" cellspacing="0" align="center"><tr>{cells}</tr></table>'
+            f'<table role="presentation" cellpadding="0" cellspacing="0" align="center" '
+            f'style="background:#FFFFFF;border-radius:8px;padding:8px 6px"><tr>{cells}</tr></table>'
             f'</td></tr>')
 
 
@@ -222,15 +236,15 @@ def _work(s: dict) -> str:
         pic = (f'<img src="{html.escape(img)}" width="170" alt="{html.escape(title)} website" '
                f'style="display:block;width:100%;height:auto;border-radius:8px 8px 0 0;border:0">' if img else "")
         cells += (f'<td width="33%" style="vertical-align:top;padding:0 5px">'
-                  f'<a href="{html.escape(port)}" style="text-decoration:none;color:{NAVY}">'
+                  f'<a href="{html.escape(port)}" style="text-decoration:none;color:{P["txt"]}">'
                   f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-                  f'style="border:1px solid {LINE};border-radius:8px;background:#ffffff"><tr><td>{pic}'
-                  f'<div style="padding:8px 10px 2px 10px;font-size:13px;font-weight:700;color:{NAVY}">'
-                  f'{html.escape(title)}</div><div style="padding:0 10px 10px 10px;font-size:12px;color:{MUTED}">'
+                  f'style="border:1px solid {P["line"]};border-radius:8px;background:{P["card"]}"><tr><td>{pic}'
+                  f'<div style="padding:8px 10px 2px 10px;font-size:13px;font-weight:700;color:{P["txt"]}">'
+                  f'{html.escape(title)}</div><div style="padding:0 10px 10px 10px;font-size:12px;color:{P["muted"]}">'
                   f'{html.escape(cat)}</div></td></tr></table></a></td>')
-    more = (f'<div style="font-size:13px;margin:4px 0 22px 0"><a href="{html.escape(port)}" style="color:{TEAL};'
+    more = (f'<div style="font-size:13px;margin:4px 0 22px 0"><a href="{html.escape(port)}" style="color:{P["link"]};'
             f'text-decoration:none;font-weight:600">See the full portfolio &rarr;</a></div>') if port else ""
-    return (f'<div style="font-size:12px;font-weight:700;letter-spacing:.6px;color:{MUTED};margin:2px 0 10px 0">'
+    return (f'<div style="font-size:12px;font-weight:700;letter-spacing:.6px;color:{P["muted"]};margin:2px 0 10px 0">'
             f'RECENT WORK</div><table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
             f'<tr>{cells}</tr></table>{more}')
 
@@ -239,13 +253,20 @@ def _quote(t) -> str:
     if not t:
         return ""
     return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px 0">'
-            f'<tr><td style="background:{SOFT};border-radius:10px;padding:16px 18px">'
+            f'<tr><td style="background:{P["soft"]};border-radius:10px;padding:16px 18px">'
             f'<div style="color:#F5A623;font-size:14px;letter-spacing:2px">★★★★★</div>'
-            f'<div style="font-size:15px;line-height:1.55;color:{NAVY};margin:6px 0">“{html.escape(t[0])}”</div>'
-            f'<div style="font-size:12px;color:{MUTED}">{html.escape(t[1])}</div></td></tr></table>')
+            f'<div style="font-size:15px;line-height:1.55;color:{P["txt"]};margin:6px 0">“{html.escape(t[0])}”</div>'
+            f'<div style="font-size:12px;color:{P["muted"]}">{html.escape(t[1])}</div></td></tr></table>')
 
 
-def to_html(body: str, s: dict, testimonial=None, kind: str = "followup") -> str:
+def to_html(body: str, s: dict, testimonial=None, kind: str = "followup", theme: str | None = None) -> str:
+    theme = theme or s.get("email_theme") or "light"
+    P.clear()
+    P.update(THEMES.get(theme, THEMES["light"]))
+    dark = theme == "dark"
+    if dark:
+        s = dict(s, logo_light_url=s.get("logo_dark_url") or DEFAULT_LOGO_DARK,
+                 mark_url=s.get("mark_dark_url") or DEFAULT_MARK_DARK)
     main, sig, footer = _split(body, s.get("sender_name", "Awais"))
     content = _paragraphs(main, s, kind)
     proof = html.escape(s.get("proof_line", "Wix Legend Partner · About 2,000 projects in 8 years · 24/7 support"))
@@ -256,21 +277,21 @@ def to_html(body: str, s: dict, testimonial=None, kind: str = "followup") -> str
                f'width="150" alt="NA Developers" style="display:block;border:0;height:auto"></td></tr>')
         extra = _button(s)
     else:
-        top = (f'<tr><td style="background:{NAVY};padding:18px 30px;border-radius:12px 12px 0 0">'
+        top = (f'<tr><td style="background:{P["head"]};padding:18px 30px;border-radius:12px 12px 0 0">'
                f'<img src="{html.escape(s.get("logo_dark_url") or DEFAULT_LOGO_DARK)}" width="140" '
                f'alt="NA Developers" style="display:block;border:0;height:auto"></td></tr>'
                f'<tr><td style="height:4px;background:{TEAL};line-height:4px;font-size:0">&nbsp;</td></tr>')
         extra = _button(s) + ((_work(s) + _quote(testimonial)) if kind == "followup" else "")
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<meta name="color-scheme" content="light only"></head><body style="margin:0;padding:0;background:#EEF2F6">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#EEF2F6;padding:28px 10px">
+<meta name="color-scheme" content="{P["scheme"]}"></head><body style="margin:0;padding:0;background:{P["page"]}">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{P["page"]};padding:28px 10px">
 <tr><td align="center">
-<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:12px;border:1px solid {LINE};{FONT};color:{NAVY}">
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:{P["card"]};border-radius:12px;border:1px solid {P["line"]};{FONT};color:{P["txt"]}">
 {top}
-<tr><td style="padding:22px 30px 10px 30px;font-size:15px;line-height:1.65;color:{NAVY}">
+<tr><td style="padding:22px 30px 10px 30px;font-size:15px;line-height:1.65;color:{P["txt"]}">
 {content}{extra}{_signature(sig, s)}
 </td></tr>
 {partners}
-<tr><td style="padding:16px 30px;background:#F7F9FB;border-top:1px solid {LINE};border-radius:0 0 12px 12px;font-size:12px;line-height:1.6;color:{MUTED}">
-<b style="color:{NAVY}">{proof}</b><br>{foot}</td></tr>
+<tr><td style="padding:16px 30px;background:{P["foot"]};border-top:1px solid {P["line"]};border-radius:0 0 12px 12px;font-size:12px;line-height:1.6;color:{P["muted"]}">
+<b style="color:{P["txt"]}">{proof}</b><br>{foot}</td></tr>
 </table></td></tr></table></body></html>"""

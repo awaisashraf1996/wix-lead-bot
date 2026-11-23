@@ -65,6 +65,7 @@ DEFAULTS = {
     "business_hours_only": True,
     "followup_days": [3, 7, 14],
     "job_title": "Founder",
+    "email_theme": "light",
     "whatsapp": "+92 315 5444281",
     "proof_line": "Wix Legend Partner · About 2,000 projects in 8 years · 24/7 support · Fixed written quote",
     "portfolio_url": "https://nadevelopers.com/portfolio",
