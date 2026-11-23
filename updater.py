@@ -83,12 +83,20 @@ def download_and_restart(info: dict, progress=None) -> None:
         f.write(
             "@echo off\r\n"
             f"set PID={os.getpid()}\r\n"
+            f"set PPID2={os.getppid()}\r\n"
             ":wait\r\n"
             'tasklist /FI "PID eq %PID%" 2>nul | find "%PID%" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\n'
+            'tasklist /FI "PID eq %PPID2%" 2>nul | find "%PPID2%" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\n'
+            "timeout /t 2 /nobreak >nul\r\n"
             f'move /y "{exe}" "{exe}.old" >nul\r\n'
             f'move /y "{new}" "{exe}" >nul\r\n'
             f'start "" "{exe}"\r\n'
             f'del /q "{exe}.old" >nul 2>nul\r\n'
             '(goto) 2>nul & del "%~f0"\r\n')
-    subprocess.Popen(["cmd", "/c", bat], cwd=folder,
+    # A fresh start must not inherit this copy's unpacked-files folder, or the
+    # new copy looks for python312.dll in a folder that has just been deleted.
+    env = {k: v for k, v in os.environ.items()
+           if not k.upper().startswith(("_MEI", "_PYI", "_PYIBOOT"))}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    subprocess.Popen(["cmd", "/c", bat], cwd=folder, env=env,
                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
