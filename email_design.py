@@ -35,7 +35,7 @@ DEFAULT_WORK = [
     ["Great Details Auto Care", "Auto repair", "https://nadevelopers.com/wp-content/uploads/2026/11/great-details-auto-care-cover-768x409.jpg"],
     ["Matador Roofing", "Roofing", "https://nadevelopers.com/wp-content/uploads/2026/11/matador-roofing-cover-768x409.jpg"],
 ]
-BADGES = "https://nadevelopers.com/wp-content/themes/na-developers/assets/img/badges/"
+BADGES = ASSET + "badges/"  # real PNG copies (the site serves WebP, which many inboxes hide)
 DEFAULT_BRAND = {
     "legend_badge": BADGES + "wix.png",
     "partner_logos": [[BADGES + "wix.png", "Wix Legend Partner", 40], [BADGES + "google.png", "Google Partner", 34],
@@ -271,7 +271,7 @@ def to_html(body: str, s: dict, testimonial=None, kind: str = "followup", theme:
     content = _paragraphs(main, s, kind)
     proof = html.escape(s.get("proof_line", "Wix Legend Partner · About 2,000 projects in 8 years · 24/7 support"))
     foot = _linkify(footer).replace("\n", "<br>")
-    partners = _partners(s) if kind != "first" else ""
+    partners = _partners(s)
     if kind == "first":
         top = (f'<tr><td style="padding:24px 30px 4px 30px"><img src="{html.escape(s.get("logo_light_url") or DEFAULT_LOGO_LIGHT)}" '
                f'width="150" alt="NA Developers" style="display:block;border:0;height:auto"></td></tr>')

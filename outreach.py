@@ -135,7 +135,7 @@ STEP_LAYOUT = {0: "reply", 1: "first"}      # everything else uses the "followup
 DEFAULTS["testimonials"] = DEFAULT_TESTIMONIALS
 DEFAULTS["branded_steps"] = BRANDED_STEPS
 
-FOOTER = ("\n\n--\n{company} · {postal_address}\n"
+FOOTER = ("\n\n--\n{company} · www.nadevelopers.com\n"
           "If you'd rather not hear from us, just reply \"unsubscribe\" and we won't "
           "email you again.")
 
@@ -303,7 +303,7 @@ def _fill(text: str, lead: dict, s: dict) -> str:
         "issues_bullets": "\n".join(f"• {p}" for p, _ in pts[:3]),
         "quick_win": pts[0][1], "calendly": s["calendly"], "company": s["company"],
         "sender_name": s["sender_name"], "website": s["website"],
-        "postal_address": s["postal_address"] or "[add your postal address in Settings]",
+        "postal_address": s["postal_address"],
     }
     try:
         return text.format(**values)
@@ -727,9 +727,6 @@ def send_approved(db: W.DB, cfg) -> int:
     Pause/Stop buttons. Returns how many were sent."""
     init(db)
     s = settings(cfg)
-    if not s["postal_address"].strip():
-        raise RuntimeError("Add a postal address in Settings > Your details. US law "
-                           "(CAN-SPAM) requires one in every sales email.")
     W.STOP.clear()
     queue = list(reversed(messages(db, "approved")))
     room = max(0, int(s["daily_limit"]) - sent_today(db))

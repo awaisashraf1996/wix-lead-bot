@@ -2068,8 +2068,6 @@ class OutreachPage(Page):
         self.summary.config(text=f"Drafts: {c['_drafts']}   ·   Approved: {c['_approved']}   ·   "
                                  f"Sent today: {c['_sent_today']}/{s['daily_limit']}{hrs}")
         problems = []
-        if not s["postal_address"].strip():
-            problems.append("add your postal address (required by US law in sales emails)")
         if not S.get_secret(self.app.cfg, "smtp_password"):
             problems.append("connect your email account")
         if problems:
