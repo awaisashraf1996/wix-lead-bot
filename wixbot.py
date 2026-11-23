@@ -67,7 +67,7 @@ if getattr(sys, "frozen", False):          # running as WixLeadBot.exe
 else:
     HERE = os.path.dirname(os.path.abspath(__file__))
     BUNDLED = HERE
-VERSION = "1.4.1"
+VERSION = "1.5.0"
 # GitHub "owner/repo" whose Releases hold new versions of WixLeadBot.exe
 UPDATE_REPO = "awaisashraf1996/wix-lead-bot"
 
@@ -239,13 +239,14 @@ CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
 EXTRA_COLUMNS = {
     "businesses": {"domain": "TEXT", "email": "TEXT", "extra": "TEXT"},
     "sites": {"site_name": "TEXT", "meta_desc": "TEXT", "og_image": "TEXT",
-              "address": "TEXT", "geo_region": "TEXT", "has_booking": "INTEGER"},
+              "address": "TEXT", "geo_region": "TEXT", "has_booking": "INTEGER",
+              "no_solicit": "INTEGER"},
 }
 SITE_COLS = ["domain", "final_url", "status", "is_wix", "wix_signals", "emails",
              "email_sources", "phones", "socials", "title", "has_meta_desc",
              "has_h1", "word_count", "copyright_year", "free_domain", "score",
              "issues", "checked_at", "site_name", "meta_desc", "og_image",
-             "address", "geo_region", "has_booking"]
+             "address", "geo_region", "has_booking", "no_solicit"]
 
 # Lead levels (colours are used by the app)
 LEVELS = {"super": ("Super", "#E8222B"), "hot": ("Hot", "#F08C2E"),
@@ -767,6 +768,25 @@ def guess_site_region(html: str, structured: dict, phones: list[str]) -> str:
     return ""
 
 
+NO_SOLICIT_RE = re.compile(r"\bno (unsolicited|solicitation|soliciting|solicitors|sales (calls|emails))\b|"
+                           r"\bdo not solicit\b|\bnot accept(ing)? (unsolicited|solicitation)", re.I)
+
+# Main time zone of each state/province (for sending in their business hours)
+REGION_TZ = {
+    **{f"US-{c}": "America/New_York" for c in "CT DE DC FL GA IN KY ME MD MA MI NH NJ NY NC OH PA RI SC VT VA WV".split()},
+    **{f"US-{c}": "America/Chicago" for c in "AL AR IL IA KS LA MN MS MO NE ND OK SD TN TX WI".split()},
+    **{f"US-{c}": "America/Denver" for c in "CO ID MT NM UT WY".split()},
+    "US-AZ": "America/Phoenix",
+    **{f"US-{c}": "America/Los_Angeles" for c in "CA NV OR WA".split()},
+    "US-AK": "America/Anchorage", "US-HI": "Pacific/Honolulu",
+    "CA-BC": "America/Vancouver", "CA-YT": "America/Whitehorse", "CA-AB": "America/Edmonton",
+    "CA-NT": "America/Yellowknife", "CA-SK": "America/Regina", "CA-MB": "America/Winnipeg",
+    "CA-ON": "America/Toronto", "CA-QC": "America/Toronto", "CA-NU": "America/Iqaluit",
+    "CA-NB": "America/Halifax", "CA-NS": "America/Halifax", "CA-PE": "America/Halifax",
+    "CA-NL": "America/St_Johns",
+}
+
+
 BOOKING_RE = re.compile(r'href="[^"]*(book-online|booking|/book|schedule|appointment)', re.I)
 
 
@@ -965,6 +985,7 @@ def check_site(website: str, fetcher: PoliteFetcher) -> dict:
         "address": structured.get("address", "")[:250],
         "geo_region": guess_site_region(html, structured, phones),
         "has_booking": int(has_booking),
+        "no_solicit": int(bool(NO_SOLICIT_RE.search(visible_text(html)))),
     })
     result.update({
         "emails": "; ".join(emails[:5]),
@@ -1527,6 +1548,12 @@ def guess_region(item: dict) -> str:
     return "UNKNOWN"
 
 
+def city_from_address(text: str) -> str:
+    """'1200 Main St, Austin, TX 78701' -> 'Austin'."""
+    m = re.search(r"([A-Za-z][A-Za-z .'-]{1,40}),\s*([A-Z]{2})\b\s*(?:\d{5}|[A-Z]\d[A-Z])?", text or "")
+    return m.group(1).strip() if m else (text or "")
+
+
 def add_captured(items: list[dict], db: "DB") -> int:
     """Store captured businesses. Returns how many were new."""
     added = 0
@@ -1544,7 +1571,7 @@ def add_captured(items: list[dict], db: "DB") -> int:
             "name": str(it.get("name") or "")[:200], "website": url,
             "phone": str(it.get("phone") or "")[:40],
             "street": str(it.get("address") or "")[:200],
-            "city": str(it.get("city") or "")[:120],
+            "city": city_from_address(str(it.get("city") or ""))[:120],
             "source": CAPTURE_SOURCE,
             "extra": {"found_on": str(it.get("found_on") or "")[:300]},
         })
@@ -1580,6 +1607,8 @@ def start_inbox(db_path: str, on_added=None, port: int = INBOX_PORT):
             self._reply(404, {"error": "not found"})
 
         def do_POST(self):
+            if self.path == "/check" and self._allowed():
+                return self._check()
             if self.path != "/capture" or not self._allowed():
                 return self._reply(403, {"error": "forbidden"})
             try:
@@ -1592,6 +1621,28 @@ def start_inbox(db_path: str, on_added=None, port: int = INBOX_PORT):
             if on_added:
                 on_added(added, len(items), items)
             self._reply(200, {"received": len(items), "new": added})
+
+        def _check(self):
+            """One business from Google Maps: save it and check its website now."""
+            try:
+                length = min(int(self.headers.get("Content-Length", 0)), 200_000)
+                item = json.loads(self.rfile.read(length) or b"{}").get("item") or {}
+            except (ValueError, AttributeError) as e:
+                return self._reply(400, {"error": str(e)})
+            url = normalise_url(str(item.get("website") or ""))
+            d = domain_of(url)
+            if not d:
+                return self._reply(400, {"error": "no website"})
+            item["category"] = item.get("category") or "google maps"
+            added = add_captured([item], db)
+            if not db.site_checked(d, True):
+                db.save_site(check_site(url, PoliteFetcher()))
+            r = db.q("SELECT is_wix, score, status, emails, phones FROM sites WHERE domain=?", (d,))
+            is_wix, score, status, emails, phones = r[0] if r else (0, 0, "error", "", "")
+            if on_added:
+                on_added(added, 1, [item])
+            return self._reply(200, {"is_wix": bool(is_wix), "score": score or 0, "status": status,
+                                     "level": LEVELS[lead_level(score, bool(emails), bool(phones))][0]})
 
         def log_message(self, *args):  # keep the console quiet
             pass

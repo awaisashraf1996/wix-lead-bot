@@ -17,6 +17,8 @@ import webbrowser
 from tkinter import filedialog, messagebox, ttk
 from urllib.parse import quote, quote_plus
 
+import ai
+import audit as A
 import outreach as O
 import security as S
 import updater as U
@@ -35,7 +37,7 @@ LEVEL_COLOR = {k: v[1] for k, v in W.LEVELS.items()}
 LEVEL_TINT = {"super": "#FDE7E8", "hot": "#FEF0E2", "normal": "#FFFFFF"}
 STATUS_COLOR = {"new": MUTED, "draft": "#7A5AF8", "emailed": TEAL, "replied": GREEN,
                 "call_booked": GREEN, "proposal_sent": "#0E7490", "won": "#15803D",
-                "lost": "#9CA3AF", "no_reply": "#9CA3AF", "unsubscribed": RED,
+                "lost": "#9CA3AF", "no_reply": "#9CA3AF", "later": AMBER, "unsubscribed": RED,
                 "bounced": RED, "do_not_contact": RED}
 FONT = "Segoe UI" if sys.platform.startswith("win") else "DejaVu Sans"
 
@@ -310,6 +312,19 @@ class App:
             return
         self.db = W.DB(DB_PATH)
         O.init(self.db)
+        A.init(self.db)
+        ai.init(self.db)
+        try:
+            O.backup(DB_PATH)
+        except Exception:
+            pass
+        try:   # keep a current copy of the Chrome helper next to the app
+            import shutil
+            src = os.path.join(W.BUNDLED, "chrome-extension")
+            if os.path.isdir(src) and os.path.abspath(src) != os.path.abspath(os.path.join(W.HERE, "chrome-helper")):
+                shutil.copytree(src, os.path.join(W.HERE, "chrome-helper"), dirs_exist_ok=True)
+        except Exception:
+            pass
         W.LOG_HOOK = lambda m: self.q.put(("log", m))
         W.PROGRESS_HOOK = lambda d: self.q.put(("prog", d))
         self.inbox = W.start_inbox(DB_PATH, lambda new, total, items:
@@ -720,10 +735,17 @@ class DashboardPage(Page):
             badge(r, W.LEVELS[lvl][0], LEVEL_COLOR[lvl]).pack(anchor="w")
             tk.Label(r, text=txt, bg=CARD, fg=MUTED, font=F(9), wraplength=280,
                      justify="left").pack(anchor="w", pady=(2, 0))
-        quick = card(right, "Quick start")
-        quick.pack(fill="x", pady=(14, 0))
-        ttk.Button(quick.inner, text="⌕  Find new leads", command=lambda: self.app.show("find")).pack(fill="x", pady=2)
-        ttk.Button(quick.inner, text="☰  Search Yellow Pages", command=lambda: self.app.show("yp")).pack(fill="x", pady=2)
+        todo = card(right, "To do")
+        todo.pack(fill="both", expand=True, pady=(14, 0))
+        self.todo_box = tk.Frame(todo.inner, bg=CARD)
+        self.todo_box.pack(fill="both", expand=True)
+        res = card(left.inner.master.master, "Results by category",
+                   "Which niches reply and buy. Use it to decide where to search next.")
+        res.pack(side="bottom", fill="x", pady=(12, 0), before=left)
+        fr2, self.res_tree = make_tree(res.inner, [("cat", "Category", 220), ("em", "Emailed", 80),
+                                                   ("rep", "Replied", 80), ("rr", "Reply %", 70),
+                                                   ("bk", "Calls", 70), ("won", "Won", 70)], height=4)
+        fr2.pack(fill="x")
 
     def refresh(self, **kw):
         db = self.db
@@ -745,6 +767,38 @@ class DashboardPage(Page):
                                 f"✎  Drafts waiting for you: {c['_drafts']}\n"
                                 f"✓  Approved to send: {c['_approved']}\n"
                                 f"↩  Replies to answer: {c['replied']}"))
+        for w in self.todo_box.winfo_children():
+            w.destroy()
+        items = []
+        nrep = db.q("SELECT COUNT(*) FROM replies r JOIN outreach o ON o.domain=r.domain WHERE r.handled=0"
+                    " AND r.kind IN ('interested','question','other') AND o.status IN ('replied','later')")[0][0]
+        if nrep:
+            items.append((f"↩  Answer {nrep} repl{'y' if nrep == 1 else 'ies'}", lambda: self.app.show("outreach", view="replies"), None))
+        nb = c.get("call_booked", 0)
+        if nb:
+            items.append((f"☎  {nb} call{'s' if nb > 1 else ''} booked, open the call brief", lambda: self.app.show("pipeline"), None))
+        names = {r["domain"]: (r["name"] or r["domain"]) for r in recs}
+        for tid, dom, kind, due in O.due_tasks(db)[:6]:
+            items.append((f"★  {O.TASK_LABELS.get(kind, kind)}: {names.get(dom, dom)}",
+                           lambda d=dom: self.app.open_profile(d), tid))
+        if not items:
+            tk.Label(self.todo_box, text="Nothing waiting. Find or email more leads.", bg=CARD, fg=MUTED,
+                     font=F(9)).pack(anchor="w")
+        for text, cmd, tid in items:
+            r = tk.Frame(self.todo_box, bg=CARD)
+            r.pack(fill="x", pady=2)
+            lb = tk.Label(r, text=text, bg=CARD, fg=TEAL_DARK, cursor="hand2", font=F(9, "bold"),
+                          wraplength=230, justify="left", anchor="w")
+            lb.pack(side="left", fill="x", expand=True)
+            lb.bind("<Button-1>", lambda e, c=cmd: c())
+            if tid:
+                ttk.Button(r, text="Done", width=5, command=lambda t=tid: (O.done_task(db, t), self.refresh())).pack(side="right")
+        self.res_tree.delete(*self.res_tree.get_children())
+        for row in O.funnel(db):
+            lab = self.app.cats.get(row["category"], {}).get("short") or row["category"].replace("_", " ").title()
+            self.res_tree.insert("", "end", values=(lab, row["emailed"], row["replied"],
+                                                    f"{100 * row['replied'] / row['emailed']:.0f}%" if row["emailed"] else "-",
+                                                    row["booked"], row["won"]))
         self.tree.delete(*self.tree.get_children())
         status = {d: s for d, s in db.q("SELECT domain, status FROM outreach")}
         best = [r for r in recs if status.get(r["domain"], "new") in ("new",)][:40]
@@ -1034,7 +1088,11 @@ class YPPage(Page):
                  "5. Come back and click “Check captured\n    websites” to find the Wix ones.")
         tk.Label(b, text=steps, bg="#F5FAFB", fg=TEXT, justify="left", font=F(9), padx=10, pady=10,
                  highlightthickness=1, highlightbackground="#D5EBF0").pack(fill="x", pady=(10, 0))
-        tk.Label(b, text="Yellow Pages' terms don't allow automated scraping, so the app\n"
+        tk.Label(b, text="Google Maps: use the Chrome helper. Open one business on Maps,\n"
+                 "click the helper, then 'Check if Wix & save to app'. Load the helper\n"
+                 "from the 'chrome-helper' folder next to WixLeadBot.exe\n"
+                 "(chrome://extensions > Developer mode > Load unpacked).\n\n"
+                 "Yellow Pages' terms don't allow automated scraping, so the app\n"
                  "never clicks for you. It only reads pages you open yourself.",
                  bg=CARD, fg=MUTED, font=F(8), justify="left").pack(anchor="w", pady=(10, 0))
 
@@ -1166,8 +1224,11 @@ class LeadsPage(Page):
                 self.region_cb = cb
             if var is self.fcat:
                 self.cat_cb = cb
-        ttk.Checkbutton(bar, text="Has email", variable=self.femail, command=self.fill,
-                        style="TCheckbutton").pack(side="left", padx=8)
+        self.femail = tk.StringVar(value="Any contact")
+        cbe = ttk.Combobox(bar, textvariable=self.femail, state="readonly", width=17,
+                           values=["Any contact", "Has email", "No email (call list)"])
+        cbe.pack(side="left", padx=8)
+        cbe.bind("<<ComboboxSelected>>", lambda ev: self.fill())
         ttk.Button(bar, text="Export CSV", command=self.export).pack(side="right")
         self.legend = tk.Frame(self.body, bg=BG)
         self.legend.pack(fill="x", pady=(0, 8))
@@ -1211,7 +1272,7 @@ class LeadsPage(Page):
             self.fregion.set("All regions")
             self.fcat.set("All categories")
             self.fstatus.set("Any status")
-            self.femail.set(False)
+            self.femail.set("Any contact")
         self.fill()
         if select and self.tree.exists(select):
             self.tree.selection_set(select)
@@ -1245,7 +1306,9 @@ class LeadsPage(Page):
                 continue
             if st not in ("Any status", "Not contacted") and O.STATUS_LABELS.get(s) != st:
                 continue
-            if self.femail.get() and not r["emails"]:
+            if self.femail.get() == "Has email" and not r["emails"]:
+                continue
+            if self.femail.get().startswith("No email") and r["emails"]:
                 continue
             name = r["name"] or r.get("site_name") or r["domain"]
             if q and q not in f"{name} {r['domain']} {r.get('city') or ''} {r.get('emails') or ''}".lower():
@@ -1372,7 +1435,9 @@ class Profile:
         st = (O.get_outreach(self.db, lead["domain"]) or {}).get("status", "new")
         badge(br, O.STATUS_LABELS[st], STATUS_COLOR.get(st, MUTED)).pack(side="left", padx=(0, 6))
         if lead.get("free_domain"):
-            badge(br, "FREE WIX ADDRESS", NAVY).pack(side="left")
+            badge(br, "FREE WIX ADDRESS", NAVY).pack(side="left", padx=(0, 6))
+        if lead.get("no_solicit"):
+            badge(br, "SAYS NO SOLICITATION", RED).pack(side="left")
 
         # score bar
         sc = lead.get("score") or 0
@@ -1391,12 +1456,13 @@ class Profile:
                    command=self.draft).pack(side="left")
         ttk.Button(acts, text="Open website",
                    command=lambda: open_url(lead.get("final_url") or lead.get("website"))).pack(side="left", padx=6)
-        ttk.Button(acts, text="Copy audit", command=self.copy_audit).pack(side="left")
+        ttk.Button(acts, text="Call brief", command=self.open_brief).pack(side="left")
         mb = ttk.Menubutton(acts, text="More ▾")
         menu = tk.Menu(mb, tearoff=0)
         menu.add_command(label="Do not contact", command=lambda: self.set_status("do_not_contact"))
         menu.add_command(label="This is my client (never contact)", command=self.mark_client)
         menu.add_command(label="Copy email address", command=self.copy_email)
+        menu.add_command(label="Copy short audit text", command=self.copy_audit)
         mb["menu"] = menu
         mb.pack(side="left", padx=6)
 
@@ -1460,7 +1526,11 @@ class Profile:
             tk.Label(r, text="✗", bg=CARD, fg=RED, font=F(10, "bold")).pack(side="left", anchor="n")
             self.W(tk.Label(r, text=iss, bg=CARD, justify="left", anchor="w"), 80).pack(side="left", padx=6)
 
-        a = self.section("Mini audit (paste into an email or a Loom)")
+        self.build_audit_section(lead)
+        self.build_ai_section(lead)
+        self.build_mockup_section(lead)
+
+        a = self.section("Quick audit text (paste into an email or a Loom)")
         t = tk.Text(a, height=12, wrap="word", font=F(9), bg="#F8FAFC", relief="flat",
                     padx=8, pady=6, highlightthickness=1, highlightbackground=BORDER)
         t.insert("1.0", O.audit_text(lead))
@@ -1504,6 +1574,159 @@ class Profile:
         tk.Frame(b, bg=CARD, height=20).pack()
         self.sf.canvas.yview_moveto(0)
         self.sf.body.after(50, self._rewrap)
+
+    # ----- full audit
+    def build_audit_section(self, lead):
+        sec = self.section("Full audit (Google speed, SEO, design, business)")
+        a = A.get(self.db, lead["domain"])
+        if not a:
+            tk.Label(sec, text="Not audited yet. Takes about 30-60 seconds.", bg=CARD, fg=MUTED,
+                     font=F(9)).pack(anchor="w")
+            ttk.Button(sec, text="Run full audit", style="Dark.TButton",
+                       command=self.run_audit).pack(anchor="w", pady=(6, 0))
+            return
+        row = tk.Frame(sec, bg=CARD)
+        row.pack(fill="x")
+        ov = a.get("overall", 0)
+        col = GREEN if ov >= 80 else AMBER if ov >= 50 else RED
+        tk.Label(row, text=f"{ov}", bg=CARD, fg=col, font=F(22, "bold")).pack(side="left")
+        tk.Label(row, text="/100 overall", bg=CARD, fg=MUTED).pack(side="left", padx=(2, 14), pady=(10, 0))
+        for cid, lab in A.CATEGORIES:
+            v = a.get("psi", {}).get("scores", {}).get(cid)
+            if v is not None:
+                c2 = GREEN if v >= 90 else AMBER if v >= 50 else RED
+                badge(row, f"{lab.split(' ')[0]} {v}", c2).pack(side="left", padx=2, pady=(10, 0))
+        if a.get("psi_error"):
+            self.W(tk.Label(sec, text="PageSpeed: " + a["psi_error"], bg=CARD, fg=RED, font=F(8),
+                            justify="left")).pack(anchor="w")
+        for f in A.top_findings(a, 5):
+            r = tk.Frame(sec, bg=CARD)
+            r.pack(fill="x")
+            tk.Label(r, text="✗", bg=CARD, fg=RED, font=F(9, "bold")).pack(side="left", anchor="n")
+            self.W(tk.Label(r, text=f, bg=CARD, justify="left", font=F(9), anchor="w"), 80).pack(side="left", padx=6)
+        b = tk.Frame(sec, bg=CARD)
+        b.pack(anchor="w", pady=(6, 0))
+        ttk.Button(b, text="Open report", style="Primary.TButton",
+                   command=lambda: open_url("file:///" + a["report"].replace(os.sep, "/"))
+                   if a.get("report") else None).pack(side="left")
+        ttk.Button(b, text="Run again", command=self.run_audit).pack(side="left", padx=6)
+        tk.Label(sec, text=f"Audited {a.get('created_at', '')[:10]}. Report: Ctrl+P in the browser to save as PDF.",
+                 bg=CARD, fg=MUTED, font=F(8)).pack(anchor="w", pady=(4, 0))
+
+    def run_audit(self):
+        lead = self.lead
+        key = S.get_secret(self.app.cfg, "psi_key")
+        self.app.run_job("Auditing website", lambda: A.run(self.db, lead, key, O.settings(self.app.cfg)),
+                         after=lambda res: self._reshow(lead["domain"]))
+
+    def _reshow(self, domain):
+        if self.lead and self.lead["domain"] == domain:
+            rec = next((r for r in self.db.lead_records("s.domain=?", (domain,))), None)
+            if rec:
+                self.show(rec)
+
+    # ----- Gemini plan
+    def build_ai_section(self, lead):
+        sec = self.section("Gemini plan + custom email")
+        plan = ai.get_plan(self.db, lead["domain"])
+        if not ai.enabled(self.app.cfg):
+            tk.Label(sec, text="Add your free Gemini API key in Settings > AI & audit to get a tailored "
+                     "plan and email for each business.", bg=CARD, fg=MUTED, font=F(9), wraplength=360,
+                     justify="left").pack(anchor="w")
+            return
+        if not plan:
+            ttk.Button(sec, text="✦  Make plan + email with Gemini", style="Dark.TButton",
+                       command=self.make_plan).pack(anchor="w")
+            tk.Label(sec, text="Runs the full audit first if needed.", bg=CARD, fg=MUTED,
+                     font=F(8)).pack(anchor="w", pady=(4, 0))
+            return
+        for title, key in (("Angle", "angle"), ("Package", "package")):
+            if plan.get(key):
+                r = tk.Frame(sec, bg=CARD)
+                r.pack(fill="x", pady=1)
+                tk.Label(r, text=title, bg=CARD, fg=MUTED, font=F(9), width=9, anchor="nw").pack(side="left", anchor="n")
+                self.W(tk.Label(r, text=plan[key], bg=CARD, justify="left", font=F(9), anchor="w"), 110).pack(side="left")
+        if plan.get("talking_points"):
+            tk.Label(sec, text="Talking points", bg=CARD, fg=MUTED, font=F(9)).pack(anchor="w", pady=(4, 0))
+            for t in plan["talking_points"]:
+                self.W(tk.Label(sec, text="• " + str(t), bg=CARD, justify="left", font=F(9), anchor="w"), 60).pack(anchor="w")
+        b = tk.Frame(sec, bg=CARD)
+        b.pack(anchor="w", pady=(6, 0))
+        ttk.Button(b, text="✉  Use Gemini's email as draft", style="Primary.TButton",
+                   command=self.draft_from_plan).pack(side="left")
+        ttk.Button(b, text="Write again", command=self.make_plan).pack(side="left", padx=6)
+
+    def make_plan(self):
+        lead = self.lead
+        key = S.get_secret(self.app.cfg, "psi_key")
+
+        def go():
+            a = A.get(self.db, lead["domain"]) or A.run(self.db, lead, key, O.settings(self.app.cfg))
+            return ai.make_plan(self.db, self.app.cfg, lead, a)
+        self.app.run_job("Gemini plan", go, after=lambda res: self._reshow(lead["domain"]))
+
+    def draft_from_plan(self):
+        plan = ai.get_plan(self.db, self.lead["domain"]) or {}
+        mid = O.make_draft(self.db, self.app.cfg, self.lead, 1, subject=plan.get("subject"),
+                           body=plan.get("email"))
+        if mid is None:
+            existing = O.messages(self.db, domain=self.lead["domain"])
+            if existing:
+                return self.app.show("outreach", select=existing[0]["id"])
+            return messagebox.showinfo("Not allowed", "No email address, or this lead is on your "
+                                       "do-not-contact list / asks for no solicitation.")
+        self.app.show("outreach", select=mid)
+
+    # ----- mockup prompt
+    def build_mockup_section(self, lead):
+        sec = self.section("Mockup (make it in the Gemini app)")
+        prompt = ai.mockup_prompt(lead, A.get(self.db, lead["domain"]), ai.get_plan(self.db, lead["domain"]))
+        t = tk.Text(sec, height=7, wrap="word", font=F(9), bg="#F8FAFC", relief="flat", padx=8, pady=6,
+                    highlightthickness=1, highlightbackground=BORDER)
+        t.insert("1.0", prompt)
+        t.config(state="disabled")
+        t.pack(fill="x")
+        b = tk.Frame(sec, bg=CARD)
+        b.pack(anchor="w", pady=(6, 0))
+
+        def copy():
+            self.app.root.clipboard_clear()
+            self.app.root.clipboard_append(prompt)
+            self.app.toast("Mockup prompt copied. Paste it into Gemini.")
+        ttk.Button(b, text="Copy prompt", style="Primary.TButton", command=copy).pack(side="left")
+        ttk.Button(b, text="Open Gemini", command=lambda: (copy(), open_url(ai.GEMINI_APP))).pack(side="left", padx=6)
+        ttk.Button(b, text="Attach mockup…", command=self.attach_mockup).pack(side="left")
+        mf = A.mockup_file(lead["domain"])
+        if mf:
+            tk.Label(sec, text="Mockup saved ✓ (shown in the call brief, can be attached to emails)",
+                     bg=CARD, fg=GREEN, font=F(8, "bold")).pack(anchor="w", pady=(6, 2))
+            ml = tk.Label(sec, bg=CARD, cursor="hand2")
+            ml.pack(anchor="w")
+            ml.bind("<Button-1>", lambda e: open_url("file:///" + mf.replace(os.sep, "/")))
+            try:
+                from PIL import Image, ImageTk
+                im = Image.open(mf)
+                im.thumbnail((420, 260))
+                self.mock_ref = ImageTk.PhotoImage(im)
+                ml.config(image=self.mock_ref)
+            except Exception:
+                ml.config(text="Open mockup", fg=TEAL)
+
+    def attach_mockup(self):
+        path = filedialog.askopenfilename(title="Mockup image you made in Gemini",
+                                          filetypes=[("Images", "*.png *.jpg *.jpeg *.webp")])
+        if not path:
+            return
+        try:
+            A.save_mockup(self.lead["domain"], path)
+        except (RuntimeError, OSError) as e:
+            return messagebox.showerror("Mockup", str(e))
+        self.app.toast("Mockup saved")
+        self.show(self.lead)
+
+    def open_brief(self):
+        path = A.call_brief(self.db, self.app.cfg, self.lead)
+        open_url("file:///" + path.replace(os.sep, "/"))
 
     def _fetch_image(self, domain, url):
         try:
@@ -1587,8 +1810,9 @@ class OutreachPage(Page):
         self.summary.pack(fill="x", pady=(0, 10))
         row = tk.Frame(t, bg=CARD)
         row.pack(fill="x")
-        ttk.Button(row, text="①  Draft emails for Super + Hot leads", style="Dark.TButton",
-                   command=self.bulk).pack(side="left")
+        ttk.Button(row, text="✦  Gemini emails for Super + Hot", style="Dark.TButton",
+                   command=self.bulk_ai).pack(side="left")
+        ttk.Button(row, text="Template emails", command=self.bulk).pack(side="left", padx=(6, 0))
         ttk.Button(row, text="⟳  Create due follow-ups", command=self.followups).pack(side="left", padx=6)
         ttk.Button(row, text="↩  Check inbox for replies", command=self.inbox).pack(side="left")
         ttk.Button(row, text="✉  Send approved emails", style="Primary.TButton",
@@ -1605,7 +1829,8 @@ class OutreachPage(Page):
         fb.pack(fill="x", pady=(0, 8))
         self.filter = tk.StringVar(value="draft")
         for val, txt in (("draft", "Waiting for approval"), ("approved", "Approved"),
-                         ("sent", "Sent"), ("failed", "Failed"), ("cancelled", "Cancelled")):
+                         ("sent", "Sent"), ("failed", "Failed"), ("cancelled", "Cancelled"),
+                         ("replies", "Replies")):
             ttk.Radiobutton(fb, text=txt, value=val, variable=self.filter,
                             command=self.fill).pack(side="left", padx=(0, 10))
         fr, self.tree = make_tree(left.inner, [("biz", "Business", 200), ("to", "To", 210),
@@ -1635,11 +1860,17 @@ class OutreachPage(Page):
         ttk.Button(br, text="Save changes", command=self.save).pack(side="left", padx=6)
         ttk.Button(br, text="Skip", command=lambda: self.set_selected("cancelled")).pack(side="left")
         ttk.Button(br, text="Open profile", command=self.profile).pack(side="right")
+        ttk.Button(br, text="📎 Attach", command=self.attach).pack(side="right", padx=(0, 6))
+        self.btn_answer = ttk.Button(br, text="✎  Draft an answer", style="Dark.TButton", command=self.answer)
+        self.att_lbl = tk.Label(r, bg=CARD, fg=MUTED, font=F(8), anchor="w")
+        self.att_lbl.pack(fill="x", before=br)
         ttk.Button(br, text="Approve all shown", command=self.approve_all).pack(side="right", padx=6)
         self.cur = None
         self.names = {}
 
-    def refresh(self, select=None, **kw):
+    def refresh(self, select=None, view=None, **kw):
+        if view:
+            self.filter.set(view)
         c = O.counts(self.db)
         s = O.settings(self.app.cfg)
         hrs = "" if not s["business_hours_only"] else ("   ·   sending now: yes" if O.in_business_hours()
@@ -1666,6 +1897,21 @@ class OutreachPage(Page):
 
     def fill(self, select=None):
         self.tree.delete(*self.tree.get_children())
+        if self.filter.get() == "replies":
+            self.btn_approve.config(state="disabled")
+            self.btn_answer.pack(side="left", padx=6)
+            for rid, dom, frm, subj, kind, when, handled in self.db.q(
+                    "SELECT id, domain, from_addr, subject, kind, received_at, handled FROM replies ORDER BY id DESC"):
+                self.tree.insert("", "end", iid=f"r{rid}", values=(
+                    self.names.get(dom, dom), frm, ai.REPLY_KINDS.get(kind, kind) + (" ✓" if handled else ""),
+                    (when or "")[:16].replace("T", " ")))
+            kids = self.tree.get_children()
+            if kids:
+                self.tree.selection_set(kids[0])
+                self.tree.focus(kids[0])
+                self.on_select()
+            return
+        self.btn_answer.pack_forget()
         for m in O.messages(self.db, self.filter.get()):
             self.tree.insert("", "end", iid=str(m["id"]), values=(
                 self.names.get(m["domain"], m["domain"]), m["to_addr"],
@@ -1688,6 +1934,22 @@ class OutreachPage(Page):
         i = self.tree.focus()
         if not i:
             return
+        if i.startswith("r"):
+            row = self.db.q("SELECT domain, from_addr, subject, snippet, kind FROM replies WHERE id=?", (int(i[1:]),))
+            if not row:
+                return
+            dom, frm, subj, snip, kind = row[0]
+            self.cur = None
+            self.cur_reply = {"id": int(i[1:]), "domain": dom, "from": frm, "subject": subj,
+                              "text": snip, "kind": kind}
+            self.to.set(frm)
+            self.subj.set(subj)
+            self.body_t.config(state="normal")
+            self.body_t.delete("1.0", "end")
+            self.body_t.insert("1.0", f"[{ai.REPLY_KINDS.get(kind, kind)}]\n\n{snip}")
+            self.body_t.config(state="disabled")
+            self.att_lbl.config(text="")
+            return
         m = next((m for m in O.messages(self.db) if str(m["id"]) == i), None)
         if not m:
             return
@@ -1696,6 +1958,9 @@ class OutreachPage(Page):
         self.subj.set(m["subject"])
         self.body_t.delete("1.0", "end")
         self.body_t.insert("1.0", m["body"])
+        import json as _json
+        atts = _json.loads(m.get("attachments") or "[]")
+        self.att_lbl.config(text=("Attached: " + ", ".join(os.path.basename(a) for a in atts)) if atts else "")
         editable = m["status"] in ("draft", "approved", "failed")
         self.btn_approve.config(state="normal" if m["status"] in ("draft", "failed") else "disabled")
         self.body_t.config(state="normal" if editable else "disabled")
@@ -1746,6 +2011,57 @@ class OutreachPage(Page):
     def profile(self):
         if self.cur:
             self.app.open_profile(self.cur["domain"])
+
+    def bulk_ai(self):
+        if not ai.enabled(self.app.cfg):
+            return messagebox.showinfo("Gemini", "Add your free Gemini API key in Settings > AI & audit first.")
+        if not messagebox.askyesno("Gemini emails", "For up to 25 Super/Hot leads with an email: run the "
+                                   "full audit, ask Gemini for a plan and a custom email, and save it as a "
+                                   "draft for your approval. Takes about 1 minute per lead. Start?"):
+            return
+        key = S.get_secret(self.app.cfg, "psi_key")
+        self.app.run_job("Gemini emails", lambda: O.ai_draft_many(self.db, self.app.cfg, psi_key=key),
+                         after=lambda n: (self.filter.set("draft"), self.refresh()))
+
+    def attach(self):
+        if not self.cur or self.cur["status"] not in ("draft", "approved", "failed"):
+            return messagebox.showinfo("Attach", "Pick a draft first.")
+        import json as _json
+        mf = A.mockup_file(self.cur["domain"])
+        path = filedialog.askopenfilename(title="File to attach (your mockup, a PDF...)",
+                                          initialdir=os.path.dirname(mf) if mf else OUT_DIR,
+                                          initialfile=os.path.basename(mf) if mf else "")
+        if not path:
+            return
+        if os.path.getsize(path) > 5 * 1024 * 1024:
+            return messagebox.showwarning("Attach", "Keep attachments under 5 MB so the email isn't blocked.")
+        atts = _json.loads(self.cur.get("attachments") or "[]") + [path]
+        O.update_message(self.db, self.cur["id"], attachments=_json.dumps(atts))
+        if self.cur["step"] == 1:
+            self.app.toast("Tip: attachments in a first email often go to spam. Better in a follow-up.", AMBER)
+        self.fill(self.cur["id"])
+
+    def answer(self):
+        r = getattr(self, "cur_reply", None)
+        if not r:
+            return
+        lead = next((x for x in self.db.lead_records("s.domain=?", (r["domain"],))), {"domain": r["domain"]})
+
+        def go():
+            return ai.draft_reply(self.app.cfg, lead, r["text"], r["kind"])
+
+        def done(text):
+            if not text:
+                return
+            subj = r["subject"] if r["subject"].lower().startswith("re:") else "Re: " + r["subject"]
+            mid = O.make_draft(self.db, self.app.cfg, lead, 0, to_addr=r["from"], subject=subj, body=text)
+            self.db.x("UPDATE replies SET handled=1 WHERE id=?", (r["id"],))
+            self.filter.set("draft")
+            self.refresh(select=mid)
+        if ai.enabled(self.app.cfg):
+            self.app.run_job("Gemini reply", go, after=done)
+        else:
+            done(go())
 
     def bulk(self):
         n = O.draft_for_level(self.db, self.app.cfg)
@@ -1811,7 +2127,8 @@ class PipelinePage(Page):
         self.flabel.pack(side="left")
         ttk.Button(bar, text="Show all", command=lambda: self.set_filter(None)).pack(side="left", padx=10)
         ttk.Button(bar, text="Open profile", command=self.open).pack(side="right")
-        for key, label in (("won", "Won"), ("lost", "Lost"), ("proposal_sent", "Proposal sent"),
+        ttk.Button(bar, text="Call brief", command=self.brief).pack(side="right", padx=4)
+        for key, label in (("won", "Won"), ("lost", "Lost"), ("later", "Not now"), ("proposal_sent", "Proposal sent"),
                            ("call_booked", "Call booked"), ("replied", "Replied")):
             ttk.Button(bar, text=f"→ {label}", command=lambda k=key: self.move(k)).pack(side="right", padx=2)
         fr, self.tree = make_tree(lc.inner, [("level", "Level", 85), ("biz", "Business", 230),
@@ -1861,6 +2178,13 @@ class PipelinePage(Page):
         d = self.tree.focus()
         if d:
             self.app.open_profile(d)
+
+    def brief(self):
+        d = self.tree.focus()
+        lead = next((r for r in self.db.lead_records("s.domain=?", (d,))), None) if d else None
+        if lead:
+            path = A.call_brief(self.db, self.app.cfg, lead)
+            open_url("file:///" + path.replace(os.sep, "/"))
 
 
 # ---------------------------------------------------------------------------
@@ -2021,6 +2345,34 @@ class SettingsPage(Page):
         ttk.Button(f, text="Save", style="Primary.TButton", command=self.save_details).grid(
             row=r + 3, column=1, sticky="w", pady=(14, 0))
 
+        # --- AI & audit
+        t6 = tk.Frame(nb, bg=CARD)
+        nb.add(t6, text="  AI & audit  ")
+        f = tk.Frame(t6, bg=CARD)
+        f.pack(anchor="nw", padx=24, pady=20)
+        tk.Label(f, text="Gemini API key (free): aistudio.google.com > Get API key > Create API key.\n"
+                 "Used for each business's plan, custom email and reply sorting. Mockups you make yourself "
+                 "in the Gemini app.\nPageSpeed key (optional, free): console.cloud.google.com > enable "
+                 "'PageSpeed Insights API' > Credentials > API key. Without it Google limits audits.",
+                 bg=CARD, fg=MUTED, font=F(9), justify="left").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 14))
+        self.gem_key, self.psi_key, self.gem_model = tk.StringVar(), tk.StringVar(), tk.StringVar()
+        for i, (lab, var, show) in enumerate((("Gemini API key", self.gem_key, "•"),
+                                             ("Gemini model (optional)", self.gem_model, ""),
+                                             ("PageSpeed API key", self.psi_key, "•"))):
+            tk.Label(f, text=lab, bg=CARD).grid(row=i + 1, column=0, sticky="w", pady=4)
+            ttk.Entry(f, textvariable=var, show=show, width=44).grid(row=i + 1, column=1, sticky="w")
+        self.ai_state = tk.Label(f, bg=CARD, fg=MUTED, font=F(9), justify="left")
+        self.ai_state.grid(row=4, column=1, sticky="w", pady=(6, 0))
+        bf = tk.Frame(f, bg=CARD)
+        bf.grid(row=5, column=1, sticky="w", pady=(12, 0))
+        ttk.Button(bf, text="Save", style="Primary.TButton", command=self.save_ai).pack(side="left")
+        ttk.Button(bf, text="Save + test Gemini", command=self.test_ai).pack(side="left", padx=8)
+        ttk.Separator(f).grid(row=6, column=0, columnspan=3, sticky="ew", pady=18)
+        tk.Label(f, text="Inbox health: checks your sending domain's SPF, DKIM and DMARC records, which "
+                 "decide whether your emails land in the inbox or spam.", bg=CARD, fg=MUTED, font=F(9),
+                 wraplength=620, justify="left").grid(row=7, column=0, columnspan=3, sticky="w")
+        ttk.Button(f, text="Check my sending domain", command=self.check_domain).grid(row=8, column=0, sticky="w", pady=8)
+
         # --- templates
         t3 = tk.Frame(nb, bg=CARD)
         nb.add(t3, text="  Email templates  ")
@@ -2091,6 +2443,13 @@ class SettingsPage(Page):
         has = bool(S.get_secret(self.app.cfg, "smtp_password"))
         self.pwstate.config(text="saved (encrypted)" if has else "not set", fg=GREEN if has else RED)
         self.apppw.set("")
+        self.gem_key.set("")
+        self.psi_key.set("")
+        self.gem_model.set((self.app.cfg.get("ai", {}) or {}).get("model", ""))
+        g, p = S.get_secret(self.app.cfg, "gemini_key"), S.get_secret(self.app.cfg, "psi_key")
+        self.ai_state.config(text=f"Gemini key: {'saved (encrypted)' if g else 'not set'}   ·   "
+                                  f"PageSpeed key: {'saved (encrypted)' if p else 'not set (optional)'}",
+                             fg=GREEN if g else MUTED)
         self.load_tpl()
         self.fill_supp()
 
@@ -2110,6 +2469,34 @@ class SettingsPage(Page):
         self.pick_provider()
         messagebox.showinfo("Email", f"{addr} is hosted by {name}.\nServer settings filled in. "
                             "Now paste an app password and click 'Save + send me a test email'.")
+
+    def save_ai(self, quiet=False):
+        if self.gem_key.get().strip():
+            S.save_secret(self.app.cfg, "gemini_key", self.gem_key.get().strip())
+        if self.psi_key.get().strip():
+            S.save_secret(self.app.cfg, "psi_key", self.psi_key.get().strip())
+        self.app.cfg.set("ai", {"model": self.gem_model.get().strip()})
+        self.app.cfg.save()
+        if not quiet:
+            self.app.toast("Saved")
+        self.refresh()
+
+    def test_ai(self):
+        self.save_ai(quiet=True)
+        self.app.run_job("Testing Gemini", lambda: ai.ask(self.app.cfg, "Reply with exactly: Gemini works",
+                                                          want_json=False),
+                         after=lambda res: res and messagebox.showinfo("Gemini", f"Gemini answered: {res[:80]}"))
+
+    def check_domain(self):
+        addr = O.settings(self.app.cfg)["email"]
+
+        def show(res):
+            if res:
+                messagebox.showinfo("Inbox health for " + addr.split("@")[-1],
+                                    "\n".join(("✓ " if ok else "✗ ") + t for ok, t in res) +
+                                    "\n\nFix any ✗ in your domain/email admin panel. Also: start with "
+                                    "10-15 emails a day and raise slowly over 3-4 weeks.")
+        self.app.run_job("Checking domain", lambda: O.domain_health(addr), after=show)
 
     def pick_provider(self, e=None):
         sh, sp, ih, ip = O.PROVIDERS[self.provider.get()]

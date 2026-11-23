@@ -1,4 +1,4 @@
-# NA Developers – Wix Lead Bot v1.3
+# NA Developers – Wix Lead Bot v1.5
 
 Finds local businesses in the USA and Canada whose websites are built on Wix,
 shows each one as a lead profile, and runs your outreach (drafts, approval,
@@ -25,6 +25,22 @@ sending, follow-ups, replies) from one Windows app. Free: no paid tools or API k
 
 The dark bar at the bottom shows progress (%, sites done, time left) with
 **Pause / Resume** and **Stop** for any job.
+
+### New in v1.5: from lead to sale
+
+| Step | In the app |
+|---|---|
+| Find | Also **Google Maps**: open one business on Maps, click the Chrome helper, **Check if Wix & save to app**. |
+| Audit | Profile → **Run full audit**: Google PageSpeed (speed, SEO, design, best practices + phone screenshot) and 20 design / SEO / business checks. Branded report (Ctrl+P → PDF). |
+| Personalise | Profile → **Make plan + email with Gemini** (free Gemini API key): angle, package, talking points, objections, custom email. **Mockup prompt** → Copy / Open Gemini; make the mockup yourself and **Attach mockup**. |
+| Send | Outreach → **Gemini emails for Super + Hot** (audit + plan + draft, up to 25 at a time). Sends in each lead's **local business hours**, skips addresses that can't receive email and sites that say "no solicitation". Attach files to drafts. |
+| Replies | **Check inbox** sorts replies (interested / question / not now / no / unsubscribe), detects **Calendly bookings** (→ Call booked) and bounces. Outreach → **Replies** → **Draft an answer**. "Not now" gets a check-back email after ~75 days. |
+| Call | Profile or Pipeline → **Call brief**: everything for the meeting on one page. |
+| After the sale | Mark **Won** → reminders for a Google review (7 days), care plan (30 days) and referral (45 days) on the Dashboard. |
+| Results | Dashboard → **Results by category** (emailed, replied, calls, won). |
+| Safety | Daily database backup in `backups/` (last 14 days). Settings → AI & audit → **Check my sending domain** (SPF, DKIM, DMARC). |
+
+To copy the database yourself, close the app first (or copy `wixbot.sqlite` together with any `-wal`/`-shm` files next to it).
 
 ### Lead levels
 

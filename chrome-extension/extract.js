@@ -110,3 +110,33 @@ var naIsWix = function () {
          html.indexOf("static.parastorage.com") >= 0 ||
          html.indexOf('content="Wix.com Website Builder"') >= 0;
 };
+
+// Google Maps: read ONLY the one business you have open (a place page), when you
+// click the button. It never reads search result lists or scrolls for you.
+var naMapsPlace = function () {
+  if (!/(^|\.)google\.[a-z.]+$/i.test(location.hostname) || location.pathname.indexOf("/maps") !== 0) return null;
+  function text(el) { return el ? (el.textContent || "").replace(/\s+/g, " ").trim() : ""; }
+  var main = document.querySelector('[role="main"][aria-label]') || document;
+  var name = text(main.querySelector("h1")) || (main.getAttribute && main.getAttribute("aria-label")) || "";
+  var site = main.querySelector('a[data-item-id="authority"]') ||
+             Array.prototype.find.call(main.querySelectorAll("a[aria-label]"), function (a) {
+               return /^website:/i.test(a.getAttribute("aria-label") || "");
+             });
+  var href = site ? site.href : "";
+  try {   // Google sometimes wraps the link: /url?q=https://...
+    var u = new URL(href);
+    if (/google\./.test(u.hostname) && (u.searchParams.get("q") || u.searchParams.get("url"))) {
+      href = u.searchParams.get("q") || u.searchParams.get("url");
+    }
+  } catch (e) { href = ""; }
+  var phoneBtn = main.querySelector('button[data-item-id^="phone"]');
+  var phone = phoneBtn ? (phoneBtn.getAttribute("data-item-id") || "").replace(/^phone:tel:/, "") : "";
+  var addrBtn = main.querySelector('button[data-item-id="address"]');
+  var address = addrBtn ? (addrBtn.getAttribute("aria-label") || text(addrBtn)).replace(/^Address:\s*/i, "") : "";
+  var catBtn = main.querySelector('button[jsaction*="category"]');
+  return {
+    name: name.slice(0, 200), website: href, phone: phone.slice(0, 40), address: address.slice(0, 200),
+    city: address.slice(0, 120), category: text(catBtn).slice(0, 60) || "google maps",
+    found_on: location.href.split("?")[0].slice(0, 300)
+  };
+};

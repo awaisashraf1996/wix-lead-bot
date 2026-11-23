@@ -111,6 +111,49 @@ $("capture").addEventListener("click", async () => {
   }
 });
 
+// ---------- Google Maps: one business at a time ----------
+async function mapsPlace(tab) {
+  if (!tab || !/^https:\/\/(www\.)?google\.[a-z.]+\/maps/i.test(tab.url || "")) return null;
+  $("mapscard").style.display = "block";
+  const p = await runInPage(tab, "naMapsPlace");
+  if (!p || !p.name) {
+    $("mapsinfo").textContent = "Click one business in the list so its details panel opens.";
+    $("mapscheck").disabled = true;
+    return null;
+  }
+  $("mapsinfo").textContent = p.website ? `${p.name} - ${p.website.replace(/^https?:\/\/(www\.)?/, "").split("/")[0]}`
+                                        : `${p.name} - no website listed (a lead for a brand-new site!)`;
+  $("mapsinfo").className = p.website ? "yes" : "no";
+  $("mapscheck").disabled = !p.website;
+  return p;
+}
+
+$("mapscheck").addEventListener("click", async () => {
+  const tab = await activeTab();
+  const p = await mapsPlace(tab);
+  if (!p || !p.website) return;
+  if (!(await refreshApp())) {
+    await setList((await getList()).concat([p]));
+    $("mapsres").textContent = "App isn't open, so it was saved to the list below.";
+    return;
+  }
+  $("mapscheck").disabled = true;
+  $("mapsres").textContent = "Checking the website...";
+  try {
+    const r = await fetch(APP + "/check", { method: "POST", headers: { "Content-Type": "application/json" },
+                                            body: JSON.stringify({ item: p }) });
+    const res = await r.json();
+    if (!r.ok) throw new Error(res.error || r.status);
+    $("mapsres").innerHTML = res.is_wix
+      ? `<b class="yes">✔ Wix site - saved as a ${res.level} lead (score ${res.score})</b>`
+      : `<span class="no">✖ Not Wix (${res.status}). Saved anyway.</span>`;
+  } catch (e) {
+    $("mapsres").textContent = "Check failed: " + e.message;
+  } finally {
+    $("mapscheck").disabled = false;
+  }
+});
+
 // ---------- Send saved list ----------
 $("send").addEventListener("click", async () => {
   const list = await getList();
@@ -148,6 +191,7 @@ $("clear").addEventListener("click", async () => {
   $("count").textContent = (await getList()).length;
   checkWix(tab);
   refreshApp();
+  mapsPlace(tab).catch(() => {});
   if (tab && /yellowpages\.(com|ca)/i.test(tab.url || "")) {
     $("pageinfo").textContent = "Yellow Pages detected. Click Capture.";
     $("pageinfo").className = "yes";
