@@ -67,7 +67,7 @@ if getattr(sys, "frozen", False):          # running as WixLeadBot.exe
 else:
     HERE = os.path.dirname(os.path.abspath(__file__))
     BUNDLED = HERE
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 # GitHub "owner/repo" whose Releases hold new versions of WixLeadBot.exe
 UPDATE_REPO = "awaisashraf1996/wix-lead-bot"
 
@@ -286,6 +286,21 @@ class DB:
         for key, website in rows:
             self.conn.execute("UPDATE businesses SET domain=? WHERE key=?",
                               (domain_of(website), key))
+        # v1.4.1: free wixsite.com sites are keyed by account + site name
+        rows = self.conn.execute("SELECT key, website, domain FROM businesses"
+                                 " WHERE website LIKE '%.wixsite.com%'").fetchall()
+        for key, website, old in rows:
+            new = domain_of(website)
+            if new == old:
+                continue
+            self.conn.execute("UPDATE businesses SET domain=? WHERE key=?", (new, key))
+            if not self.conn.execute("SELECT 1 FROM sites WHERE domain=?", (new,)).fetchone():
+                self.conn.execute("UPDATE OR IGNORE sites SET domain=? WHERE domain=?", (new, old))
+                try:
+                    self.conn.execute("UPDATE OR IGNORE outreach SET domain=? WHERE domain=?", (new, old))
+                    self.conn.execute("UPDATE messages SET domain=? WHERE domain=?", (new, old))
+                except sqlite3.OperationalError:
+                    pass   # outreach tables not created yet
         self.conn.execute("CREATE INDEX IF NOT EXISTS ix_biz_domain ON businesses(domain)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS ix_biz_source ON businesses(source)")
         self.conn.commit()
@@ -450,7 +465,16 @@ def domain_of(url: str) -> str:
     except ValueError:
         return ""
     host = host.lower()
-    return host[4:] if host.startswith("www.") else host
+    host = host[4:] if host.startswith("www.") else host
+    if host.endswith(".wixsite.com"):
+        # one Wix account can hold several free sites: user.wixsite.com/bakery,
+        # user.wixsite.com/salon - keep them apart
+        try:
+            first = urlparse(normalise_url(url)).path.strip("/").split("/")[0].lower()
+        except ValueError:
+            first = ""
+        return f"{host}/{first}" if first else host
+    return host
 
 
 def normalise_url(url: str) -> str:
@@ -1003,7 +1027,7 @@ def run_checks(businesses: list[dict], db: DB, workers: int, recheck: bool,
             return None
         if not full:
             d = domain_of(website)
-            if d.endswith(("wixsite.com", "wixstudio.io", "wixstudio.com")):
+            if any(x in d for x in (".wixsite.com", "wixstudio.io", "wixstudio.com")):
                 return check_site(website, fetcher)
             hint = dns_wix_hint(d)
             if hint == "not_wix":
@@ -1141,7 +1165,6 @@ def _overture_connect():
 def discover_overture(region: str, categories: list[str], cats: dict, db: DB,
                       session) -> dict[str, list[dict]]:
     """One pass over Overture for a region, returns {category: [businesses]}."""
-    import re as _re
     if region not in REGION_BBOX:
         raise RuntimeError(f"no map box for {region}")
     pats = {c: "|".join(cats[c].get("overture", [])) for c in categories

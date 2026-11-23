@@ -24,8 +24,31 @@ PROVIDERS = {
     "Google Workspace / Gmail": ("smtp.gmail.com", 587, "imap.gmail.com", 993),
     "Microsoft 365 / Outlook": ("smtp.office365.com", 587, "outlook.office365.com", 993),
     "Zoho Mail": ("smtp.zoho.com", 587, "imap.zoho.com", 993),
+    "Titan Mail": ("smtp.titan.email", 465, "imap.titan.email", 993),
+    "Hostinger Mail": ("smtp.hostinger.com", 465, "imap.hostinger.com", 993),
+    "GoDaddy / Microsoft 365": ("smtp.office365.com", 587, "outlook.office365.com", 993),
+    "GoDaddy Workspace Email": ("smtpout.secureserver.net", 465, "imap.secureserver.net", 993),
     "Other": ("", 587, "", 993),
 }
+MX_HINTS = [("google.com", "Google Workspace / Gmail"), ("googlemail.com", "Google Workspace / Gmail"),
+            ("outlook.com", "Microsoft 365 / Outlook"), ("zoho.", "Zoho Mail"),
+            ("titan.email", "Titan Mail"), ("hostinger", "Hostinger Mail"),
+            ("secureserver.net", "GoDaddy Workspace Email")]
+
+
+def detect_provider(email_addr: str) -> tuple[str, list[str]]:
+    """Look up the domain's mail servers (MX records) with Google's public DNS
+    service and guess the provider. Returns (provider or "", mx hosts)."""
+    import requests
+    dom = email_addr.split("@")[-1].strip().lower()
+    r = requests.get("https://dns.google/resolve", params={"name": dom, "type": "MX"},
+                     timeout=15, headers={"User-Agent": W.USER_AGENT})
+    hosts = [a["data"].split()[-1].rstrip(".").lower()
+             for a in r.json().get("Answer", []) if a.get("type") == 15]
+    for hint, name in MX_HINTS:
+        if any(hint in h for h in hosts):
+            return name, hosts
+    return "", hosts
 
 DEFAULTS = {
     "provider": "Google Workspace / Gmail",
@@ -375,9 +398,7 @@ def create_due_followups(db: W.DB, cfg) -> int:
                     " WHERE status='emailed'"):
         domain, step, first, to_addr = row
         if not first or step >= len(days):
-            if step >= len(days):
-                set_status(db, domain, "no_reply")
-            continue
+            continue          # all emails sent: handled below after a grace period
         due = dt.datetime.fromisoformat(first) + dt.timedelta(days=days[step])
         if now >= due and domain in leads:
             if make_draft(db, cfg, leads[domain], step + 1, to_addr):
@@ -386,7 +407,7 @@ def create_due_followups(db: W.DB, cfg) -> int:
     for domain, first in db.q("SELECT domain, first_sent_at FROM outreach WHERE status='emailed'"
                               " AND step >= ?", (len(days),)):
         if first and now >= dt.datetime.fromisoformat(first) + dt.timedelta(days=days[-1] + 7):
-            set_status(db, domain, "no_reply")
+            set_status(db, domain, "no_reply")   # a week after the last email
     return n
 
 
@@ -430,6 +451,7 @@ def build_message(cfg, msg: dict, thread_msgid: str | None) -> EmailMessage:
     m["Subject"] = msg["subject"]
     m["Date"] = email.utils.formatdate(localtime=True)
     m["Message-ID"] = email.utils.make_msgid(domain=s["email"].split("@")[-1])
+    m["Reply-To"] = s["email"]
     m["List-Unsubscribe"] = f"<mailto:{s['email']}?subject=unsubscribe>"
     if thread_msgid:
         m["In-Reply-To"] = thread_msgid
@@ -537,7 +559,7 @@ def check_inbox(db: W.DB, cfg, days: int = 30) -> dict:
     since = (dt.date.today() - dt.timedelta(days=days)).strftime("%d-%b-%Y")
     res = {"replied": 0, "unsubscribed": 0, "bounced": 0}
     contacted = db.q("SELECT domain, to_addr, status FROM outreach WHERE status IN"
-                     " ('emailed','replied','call_booked','proposal_sent')")
+                     " ('emailed','no_reply','replied','call_booked','proposal_sent')")
     if not contacted:
         return res
     W.log("\nChecking your inbox for replies...")
@@ -547,8 +569,15 @@ def check_inbox(db: W.DB, cfg, days: int = 30) -> dict:
         im.select("INBOX", readonly=True)
         for i, (domain, to_addr, status) in enumerate(contacted):
             W.progress(phase="inbox", done=i, total=len(contacted), label=f"Checking {domain}")
-            typ, data = im.search(None, "SINCE", since, "FROM", f'"{domain}"')
-            ids = data[0].split() if typ == "OK" and data and data[0] else []
+            ids = set()
+            site_dom = domain.split("/")[0]
+            for who in {to_addr or "", "" if site_dom.endswith(".wixsite.com") else site_dom}:
+                if not who:
+                    continue
+                typ, data = im.search(None, "SINCE", since, "FROM", f'"{who}"')
+                if typ == "OK" and data and data[0]:
+                    ids.update(data[0].split())
+            ids = sorted(ids, key=int)
             if not ids:
                 continue
             unsub = False
@@ -562,7 +591,7 @@ def check_inbox(db: W.DB, cfg, days: int = 30) -> dict:
                 set_status(db, domain, "unsubscribed")
                 res["unsubscribed"] += 1
                 W.log(f"  UNSUBSCRIBED {domain}")
-            elif status == "emailed":
+            elif status in ("emailed", "no_reply"):
                 set_status(db, domain, "replied")
                 res["replied"] += 1
                 W.log(f"  REPLIED {domain}")

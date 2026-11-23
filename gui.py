@@ -5,7 +5,6 @@ Build the .exe with BUILD_EXE.bat. Run from source with:  python gui.py
 from __future__ import annotations
 
 import csv
-import datetime as dt
 import os
 import queue
 import re
@@ -1148,7 +1147,8 @@ class LeadsPage(Page):
         e = ttk.Entry(bar, textvariable=self.fsearch, width=20)
         e.pack(side="left")
         e.insert(0, "")
-        e.bind("<KeyRelease>", lambda ev: self.fill())
+        e.bind("<KeyRelease>", self._search_later)
+        self._search_job = None
         self.flevel = tk.StringVar(value="All levels")
         self.fregion = tk.StringVar(value="All regions")
         self.fcat = tk.StringVar(value="All categories")
@@ -1188,6 +1188,11 @@ class LeadsPage(Page):
         self._sash_done = False
         pw.bind("<Configure>", self._place_sash)
         self.records = {}
+
+    def _search_later(self, e=None):
+        if self._search_job:
+            self.frame.after_cancel(self._search_job)
+        self._search_job = self.frame.after(350, self.fill)
 
     def _place_sash(self, e):
         if not self._sash_done and e.width > 600:
@@ -1958,6 +1963,8 @@ class SettingsPage(Page):
         cb = ttk.Combobox(f, textvariable=self.provider, values=list(O.PROVIDERS), state="readonly", width=32)
         cb.grid(row=1, column=1, sticky="w")
         cb.bind("<<ComboboxSelected>>", self.pick_provider)
+        ttk.Button(f, text="Detect from my email address", command=self.detect).grid(
+            row=1, column=2, sticky="w", padx=8)
         r = 2
         for key, label, w in (("email", "Email address", 34), ("smtp_host", "SMTP server", 34),
                               ("smtp_port", "SMTP port", 8), ("imap_host", "IMAP server", 34),
@@ -2086,6 +2093,23 @@ class SettingsPage(Page):
         self.apppw.set("")
         self.load_tpl()
         self.fill_supp()
+
+    def detect(self):
+        addr = self.vars["email"].get().strip()
+        if "@" not in addr:
+            return messagebox.showwarning("Email", "Type your email address first.")
+        try:
+            name, hosts = O.detect_provider(addr)
+        except Exception as e:
+            return messagebox.showerror("Email", f"Couldn't look it up: {e}")
+        if not name:
+            return messagebox.showinfo("Email", "Couldn't tell the provider from your mail servers:\n"
+                                       + ("\n".join(hosts) or "none found")
+                                       + "\n\nPick 'Other' and ask your host for SMTP/IMAP settings.")
+        self.provider.set(name)
+        self.pick_provider()
+        messagebox.showinfo("Email", f"{addr} is hosted by {name}.\nServer settings filled in. "
+                            "Now paste an app password and click 'Save + send me a test email'.")
 
     def pick_provider(self, e=None):
         sh, sp, ih, ip = O.PROVIDERS[self.provider.get()]
