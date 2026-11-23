@@ -108,6 +108,20 @@ def _paragraphs(main: str, s: dict, kind: str) -> str:
                 f'font-size:11px;font-weight:700;letter-spacing:.6px;padding:3px 8px;border-radius:4px;'
                 f'margin-right:8px">OFFER</span>{_linkify(offer)}</td></tr></table>')
             continue
+        m = re.match(r"Your free website review is ready:\s*(https?://\S+)\s*$", text.strip())
+        if m:
+            u = html.escape(m.group(1))
+            blocks.append(
+                f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:2px 0 18px 0">'
+                f'<tr><td style="background:{P["soft"]};border:1px solid {P["line"]};border-left:4px solid {TEAL};'
+                f'border-radius:10px;padding:14px 16px">'
+                f'<div style="font-size:14px;color:{P["txt"]};margin:0 0 10px 0"><b>I made you a free website review</b>'
+                f' with your scores, what we checked and what we\'d fix first.</div>'
+                f'<table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="background:{TEAL};border-radius:7px">'
+                f'<a href="{u}" style="display:inline-block;padding:10px 18px;color:#ffffff;font-weight:700;'
+                f'text-decoration:none;font-size:14px;font-family:\'Segoe UI\',Helvetica,Arial,sans-serif">'
+                f'See your free review &rarr;</a></td></tr></table></td></tr></table>')
+            continue
         if all(ln.lstrip().startswith(("•", "-", "*", "✗")) for ln in lines):
             rows = ""
             for i, ln in enumerate(lines):

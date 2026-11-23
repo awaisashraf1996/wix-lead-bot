@@ -341,6 +341,13 @@ def make_draft(db: W.DB, cfg, lead: dict, step: int = 1, to_addr: str | None = N
         mid = cur.lastrowid
     if step == 1:
         set_status(db, lead["domain"], "draft", to_addr=to_addr)
+        try:
+            import website as WS
+            url = WS.audit_url(db, lead["domain"])
+            if url:
+                WS.add_link_to_draft(db, lead["domain"], url)
+        except Exception:
+            pass
     return mid
 
 
@@ -418,8 +425,12 @@ def get_outreach(db: W.DB, domain: str) -> dict | None:
     return dict(zip(names, row)) if row else None
 
 
+ON_WON = None   # the app sets this to add a draft project on the website
+
+
 def set_status(db: W.DB, domain: str, status: str, **fields) -> None:
     init(db)
+    was = (get_outreach(db, domain) or {}).get("status")
     cur = get_outreach(db, domain) or {"domain": domain, "step": 0}
     cur.update(fields)
     cur["status"] = status
@@ -434,6 +445,11 @@ def set_status(db: W.DB, domain: str, status: str, **fields) -> None:
              " AND step > 1", (domain,))
     if status in ("unsubscribed", "do_not_contact", "bounced") and cur.get("to_addr"):
         suppress(db, cur["to_addr"], status)
+    if status == "won" and was != "won" and ON_WON:
+        try:
+            ON_WON(domain)
+        except Exception as e:
+            W.log(f"  Couldn't add the project to your website: {e}")
     if status == "won":
         today = dt.date.today()
         for kind, days in (("review", 7), ("care_plan", 30), ("referral", 45)):
@@ -641,6 +657,11 @@ def design_extras(db, domain: str) -> dict:
         perf = (a or {}).get("psi", {}).get("scores", {}).get("performance")
         if perf is not None:
             out["_speed"] = perf
+        import website as WS
+        cat = db.q("SELECT category FROM businesses WHERE domain=? LIMIT 1", (domain,))
+        work = WS.work_for(db, cat[0][0] if cat else "")
+        if work:
+            out["work"] = work
     except Exception:
         pass
     return out
@@ -744,6 +765,28 @@ def test_connection(cfg, send_to_self: bool = True) -> str:
     return "Connected. A test email was sent to your own inbox." if send_to_self else "Connected."
 
 
+def _with_audit_page(db: W.DB, cfg, msg: dict) -> dict:
+    """If the website is connected, make sure the first email links to the lead's
+    free audit page (publishing it now if needed). Never blocks sending."""
+    try:
+        import website as WS
+        if not (WS.enabled(cfg) and WS.settings(cfg)["audit_pages"]):
+            return msg
+        url = WS.audit_url(db, msg["domain"])
+        if not url:
+            lead = next(iter(db.lead_records("s.domain=?", (msg["domain"],))), None)
+            if lead:
+                url = WS.publish_audit(db, cfg, lead)
+        if url and url not in msg["body"]:
+            WS.add_link_to_draft(db, msg["domain"], url)
+            row = db.q("SELECT body FROM messages WHERE id=?", (msg["id"],))
+            if row:
+                msg = dict(msg, body=row[0][0])
+    except Exception as e:
+        W.log(f"  Audit page skipped for {msg['domain']}: {e}")
+    return msg
+
+
 def send_approved(db: W.DB, cfg) -> int:
     """Send approved emails, slowly, up to the daily limit. Uses the app's
     Pause/Stop buttons. Returns how many were sent."""
@@ -802,6 +845,8 @@ def send_approved(db: W.DB, cfg) -> int:
             if msg["step"] > 1 and msg["step"] != 5 and st.get("status") != "emailed":
                 update_message(db, msg["id"], status="cancelled", error="lead status changed")
                 continue
+            if msg["step"] == 1:
+                msg = _with_audit_page(db, cfg, msg)
             W.progress(phase="send", done=i, total=len(queue), label=f"Sending to {msg['to_addr']}")
             try:
                 if srv is None:
@@ -976,7 +1021,9 @@ def check_inbox(db: W.DB, cfg, days: int = 30) -> dict:
 # After-sale reminders, results, backups
 # ---------------------------------------------------------------------------
 TASK_LABELS = {"review": "Ask for a Google review", "care_plan": "Offer the monthly care / SEO plan",
-               "referral": "Ask for a referral"}
+               "referral": "Ask for a referral",
+               "viewed": "🔥 Opened their free review, follow up today",
+               "inquiry": "New inquiry from your website, reply"}
 
 
 def due_tasks(db: W.DB) -> list[tuple]:

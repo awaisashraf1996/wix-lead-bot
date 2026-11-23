@@ -23,6 +23,7 @@ import audit as A
 import outreach as O
 import security as S
 import updater as U
+import website as WS
 import wixbot as W
 
 ASSETS = os.path.join(W.BUNDLED, "assets")
@@ -535,12 +536,49 @@ class App:
 
     def startup_tasks(self):
         self.check_updates()
+        O.ON_WON = self._won_to_site
+        self.root.after(4000, self.website_tick)
         try:
             n = O.create_due_followups(self.db, self.cfg)
             if n:
                 self.toast(f"{n} follow-up email{'s' if n > 1 else ''} ready for your approval")
         except Exception:
             pass
+
+    def _won_to_site(self, domain):
+        if WS.enabled(self.cfg) and WS.settings(self.cfg)["won_projects"]:
+            def go():
+                try:
+                    WS.won_project(self.db, self.cfg, domain)
+                    self.q.put(("toast", "Draft project added on your website (Projects > Drafts)"))
+                except Exception as e:
+                    self.q.put(("log", f"Couldn't add the project to your website: {e}"))
+            threading.Thread(target=go, daemon=True).start()
+
+    def website_tick(self):
+        """Every 5 minutes: who opened their review, new website inquiries."""
+        if WS.enabled(self.cfg) and not getattr(self, "_ws_busy", False):
+            self._ws_busy = True
+
+            def go():
+                try:
+                    res = WS.run_background(self.db, self.cfg)
+                    names = {r["domain"]: (r["name"] or r["domain"]) for r in
+                             self.db.lead_records("s.domain IN (%s)" % ",".join("?" * len(res["views"])),
+                                                  [v["domain"] for v in res["views"]])} if res["views"] else {}
+                    for v in res["views"][:3]:
+                        self.q.put(("toast", f"🔥 {names.get(v['domain'], v['domain'])} is looking at their free "
+                                             f"review ({v['views']} view{'s' if v['views'] != 1 else ''}). Follow up today.",
+                                    RED))
+                    if res["inquiries"]:
+                        self.q.put(("toast", f"{res['inquiries']} new inquir{'y' if res['inquiries'] == 1 else 'ies'} "
+                                             "from your website. See Outreach > Replies."))
+                    if res.get("error"):
+                        self.q.put(("log", "Website: " + res["error"]))
+                finally:
+                    self._ws_busy = False
+            threading.Thread(target=go, daemon=True).start()
+        self.root.after(5 * 60 * 1000, self.website_tick)
 
     # ---------------- main layout ----------------
     def build_main(self):
@@ -1800,6 +1838,34 @@ class Profile:
         Btn(b, text="Run again", command=self.run_audit).pack(side="left", padx=6)
         tk.Label(sec, text=f"Audited {a.get('created_at', '')[:10]}. Report: Ctrl+P in the browser to save as PDF.",
                  bg=CARD, fg=MUTED, font=F(8)).pack(anchor="w", pady=(4, 0))
+        if WS.enabled(self.app.cfg):
+            url = WS.audit_url(self.db, lead["domain"])
+            v = WS.views(self.db, lead["domain"])
+            w = tk.Frame(sec, bg=CARD)
+            w.pack(fill="x", pady=(10, 0))
+            if url:
+                seen = (f"🔥 Opened {v['views']} time{'s' if v['views'] != 1 else ''}, last "
+                        f"{dt.datetime.fromtimestamp(v['last']).strftime('%d %b %H:%M')}" if v.get("views")
+                        else "Not opened yet")
+                tk.Label(w, text=f"Review page on your website · {seen}", bg=CARD,
+                         fg=RED if v.get("views") else MUTED, font=F(9, "bold")).pack(anchor="w")
+                bb = tk.Frame(w, bg=CARD)
+                bb.pack(anchor="w", pady=(4, 0))
+                Btn(bb, text="Open review page", command=lambda: open_url(url)).pack(side="left")
+                Btn(bb, text="Update page", command=self.publish_page).pack(side="left", padx=6)
+            else:
+                Btn(w, text="🌐  Make review page on my website", style="Dark.TButton",
+                    command=self.publish_page).pack(anchor="w")
+
+    def publish_page(self):
+        lead = self.lead
+
+        def go():
+            url = WS.publish_audit(self.db, self.app.cfg, lead)
+            WS.add_link_to_draft(self.db, lead["domain"], url)
+            return url
+        self.app.run_job("Review page", go, after=lambda url: (url and self.app.toast("Review page ready, "
+                         "and the link is in the first email"), self._reshow(lead["domain"])))
 
     def run_audit(self):
         lead = self.lead
@@ -2003,6 +2069,7 @@ class OutreachPage(Page):
         Btn(row, text="Templates", command=self.bulk).pack(side="left", padx=(6, 0))
         Btn(row, text="⟳  Follow-ups", command=self.followups).pack(side="left", padx=6)
         Btn(row, text="↩  Check inbox", command=self.inbox).pack(side="left")
+        Btn(row, text="🌐  Audit pages", command=self.audit_pages).pack(side="left", padx=6)
         Btn(row, text="✉  Send approved", style="Primary.TButton",
                    command=self.send).pack(side="right")
         self.warn = tk.Label(self.body, bg=WARN_BG, fg=RED_DARK, font=F(9, "bold"), anchor="w",
@@ -2284,7 +2351,27 @@ class OutreachPage(Page):
         self.app.run_job("Sending emails", lambda: O.send_approved(self.db, self.app.cfg))
 
     def inbox(self):
-        self.app.run_job("Checking inbox", lambda: O.check_inbox(self.db, self.app.cfg))
+        def go():
+            res = O.check_inbox(self.db, self.app.cfg)
+            if WS.enabled(self.app.cfg):
+                try:
+                    WS.run_background(self.db, self.app.cfg)
+                except Exception as e:
+                    W.log(f"Website: {e}")
+            return res
+        self.app.run_job("Checking inbox", go)
+
+    def audit_pages(self):
+        if not WS.enabled(self.app.cfg):
+            messagebox.showinfo("Audit pages", "Connect your website first: Settings > Website.")
+            return
+        if not messagebox.askyesno("Audit pages", "Make a free review page on nadevelopers.com for every lead "
+                                   "whose first email is waiting, and add the link to that email?\n\n"
+                                   "Leads without an audit get one first (about 30-60 seconds each)."):
+            return
+        self.app.run_job("Audit pages", lambda: WS.publish_for_drafts(self.db, self.app.cfg),
+                         after=lambda n: (self.app.toast(f"{n or 0} emails now link to their free review"),
+                                          self.refresh()))
 
 
 # ---------------------------------------------------------------------------
@@ -2570,6 +2657,41 @@ class SettingsPage(Page):
                  wraplength=620, justify="left").grid(row=7, column=0, columnspan=3, sticky="w")
         Btn(f, text="Check my sending domain", command=self.check_domain).grid(row=8, column=0, sticky="w", pady=8)
 
+        # --- website (nadevelopers.com)
+        t8 = tk.Frame(nb, bg=CARD)
+        nb.add(t8, text="  Website  ")
+        f = tk.Frame(t8, bg=CARD)
+        f.pack(anchor="nw", padx=24, pady=20)
+        tk.Label(f, text="Connect your WordPress site. Needs the free 'NA Lead Bot Bridge' plugin (Plugins > Add New "
+                 "> Upload Plugin) and an Application Password: in WordPress go to Users > Profile > "
+                 "Application Passwords, type 'Wix Lead Bot', click Add, and paste the password here.",
+                 bg=CARD, fg=MUTED, font=F(9), wraplength=640, justify="left").grid(
+            row=0, column=0, columnspan=3, sticky="w", pady=(0, 14))
+        self.ws_url, self.ws_user, self.ws_pw = tk.StringVar(), tk.StringVar(), tk.StringVar()
+        for i, (lab, var, show) in enumerate((("Website address", self.ws_url, ""),
+                                             ("WordPress username", self.ws_user, ""),
+                                             ("Application Password", self.ws_pw, "•"))):
+            tk.Label(f, text=lab, bg=CARD).grid(row=i + 1, column=0, sticky="w", pady=4)
+            ttk.Entry(f, textvariable=var, show=show, width=44).grid(row=i + 1, column=1, sticky="w")
+        self.ws_state = tk.Label(f, bg=CARD, fg=MUTED, font=F(9), justify="left", wraplength=520)
+        self.ws_state.grid(row=4, column=1, sticky="w", pady=(6, 8))
+        self.ws_opts = {}
+        for i, (k, lab) in enumerate((
+                ("enabled", "Connected (turn off to pause everything below)"),
+                ("audit_pages", "Free review page for each lead, linked in the first email"),
+                ("use_offer", "Use the announcement bar text as the offer in emails"),
+                ("use_portfolio", "Use my real projects and client reviews in emails"),
+                ("inquiries", "Bring website contact-form inquiries into the app"),
+                ("won_projects", "When I mark a deal Won, add a draft project on the site"))):
+            v = tk.BooleanVar()
+            ttk.Checkbutton(f, text=lab, variable=v).grid(row=5 + i, column=1, sticky="w", pady=1)
+            self.ws_opts[k] = v
+        bf = tk.Frame(f, bg=CARD)
+        bf.grid(row=12, column=1, sticky="w", pady=(14, 0))
+        Btn(bf, text="Save", style="Primary.TButton", command=self.save_website).pack(side="left")
+        Btn(bf, text="Save + test connection", command=self.test_website).pack(side="left", padx=8)
+        Btn(bf, text="Sync projects + offer now", command=self.sync_website).pack(side="left")
+
         # --- email content (branding)
         t7 = tk.Frame(nb, bg=CARD)
         nb.add(t7, text="  Email design  ")
@@ -2698,6 +2820,17 @@ class SettingsPage(Page):
         self.testi.insert("1.0", "\n".join(f"{q} | {n}" for q, n in (s.get("testimonials") or [])))
         for step, v in self.brand_vars.items():
             v.set(step in (s.get("branded_steps") or []))
+        ws = WS.settings(self.app.cfg)
+        self.ws_url.set(ws["url"])
+        self.ws_user.set(ws["user"])
+        self.ws_pw.set("")
+        for k, v in self.ws_opts.items():
+            v.set(bool(ws.get(k)))
+        haspw = bool(S.get_secret(self.app.cfg, "wp_app_password"))
+        synced = self.db.get_kv("wp_synced_at", "") if self.db else ""
+        self.ws_state.config(text=(f"Application Password: {'saved (encrypted)' if haspw else 'not set'}"
+                                   + (f"   ·   last sync {synced[:16].replace('T', ' ')}" if synced else "")),
+                             fg=GREEN if haspw and ws["enabled"] else MUTED)
         self.etheme.set(s.get("email_theme") or "light")
         self.load_tpl()
         self.fill_supp()
@@ -2729,6 +2862,35 @@ class SettingsPage(Page):
         if not quiet:
             self.app.toast("Saved")
         self.refresh()
+
+    def save_website(self, quiet=False):
+        s = WS.settings(self.app.cfg)
+        s.update(url=self.ws_url.get().strip().rstrip("/") or WS.DEFAULTS["url"], user=self.ws_user.get().strip())
+        for k, v in self.ws_opts.items():
+            s[k] = bool(v.get())
+        if self.ws_pw.get().strip():
+            S.save_secret(self.app.cfg, "wp_app_password", self.ws_pw.get().strip())
+            s["enabled"] = True
+        self.app.cfg.set("website", s)
+        self.app.cfg.save()
+        if not quiet:
+            self.app.toast("Saved")
+        self.refresh()
+
+    def test_website(self):
+        self.save_website(quiet=True)
+        if not WS.enabled(self.app.cfg):
+            messagebox.showinfo("Website", "Fill in the address, username and Application Password, and tick "
+                                "'Connected'.")
+            return
+        self.app.run_job("Testing website", lambda: WS.test(self.app.cfg),
+                         after=lambda res: res and messagebox.showinfo("Website", res))
+
+    def sync_website(self):
+        self.save_website(quiet=True)
+        if WS.enabled(self.app.cfg):
+            self.app.run_job("Syncing website", lambda: WS.sync(self.db, self.app.cfg),
+                             after=lambda res: (res and self.app.toast(res), self.refresh()))
 
     def test_ai(self):
         self.save_ai(quiet=True)

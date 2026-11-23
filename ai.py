@@ -60,12 +60,15 @@ def ask(cfg, prompt: str, want_json: bool = True, temperature: float = 0.6) -> d
     model = (cfg.get("ai", {}) or {}).get("model") or ""
     names = list(dict.fromkeys(([model] if model else []) + MODELS))
     last = ""
+    errs = []
     for base in _endpoints(key):
         tried = list(names)
         found = _discover(base, key)          # models this key can really use
         tried += [m for m in found if m not in tried]
         for m in tried:
             res, last, gone = _try(base, m, key, body, want_json, last)
+            if res is None and last and not last.startswith("model "):
+                errs.append(("Google AI Studio: " if base == GL else "Google Cloud: ") + last)
             if res is not None:
                 if (cfg.get("ai", {}) or {}).get("model") != m or (cfg.get("ai", {}) or {}).get("base") != base:
                     cfg.set("ai", {"model": m, "base": base})   # remember what works
@@ -76,7 +79,9 @@ def ask(cfg, prompt: str, want_json: bool = True, temperature: float = 0.6) -> d
                 return res
             if not gone:
                 break                          # a real error, not a missing model
-    raise RuntimeError(f"Gemini didn't answer ({last}). Check the key at aistudio.google.com/apikey.")
+    why = "\n".join(dict.fromkeys(errs)) or last
+    raise RuntimeError(f"Gemini didn't answer.\n{why}\n\nMake a free key at aistudio.google.com/apikey "
+                       "(Create API key > new project).")
 
 
 GL = "https://generativelanguage.googleapis.com/v1beta"
@@ -85,14 +90,14 @@ VERTEX = "https://aiplatform.googleapis.com/v1/publishers/google"   # Google Clo
 
 def _endpoints(key: str) -> list[str]:
     # AI Studio keys start with AIza; Google Cloud keys (AQ.) may only work on Vertex.
-    return [GL, VERTEX] if key.startswith("AIza") else [VERTEX, GL] if key.startswith("AQ.") else [GL, VERTEX]
+    return [GL, VERTEX]
 
 
 def _discover(base: str, key: str) -> list[str]:
     if base != GL:
         return ["gemini-2.5-flash", "gemini-2.0-flash-001", "gemini-2.5-flash-lite"]
     try:
-        r = requests.get(GL + "/models", params={"key": key, "pageSize": 200}, timeout=20)
+        r = requests.get(GL + "/models", params={"pageSize": 200}, headers={"x-goog-api-key": key}, timeout=20)
         if r.status_code != 200:
             return []
         out = [m["name"].split("/", 1)[1] for m in r.json().get("models", [])
@@ -109,7 +114,7 @@ def _try(base, m, key, body, want_json, last):
     for attempt in range(3):
         _last_call[0] = time.time()
         try:
-            r = requests.post(url, params={"key": key}, json=body, timeout=90)
+            r = requests.post(url, headers={"x-goog-api-key": key}, json=body, timeout=90)
         except requests.RequestException as e:
             last = str(e)
             time.sleep(5)
@@ -132,6 +137,9 @@ def _try(base, m, key, body, want_json, last):
             msg = r.text[:200]
         if r.status_code == 404:
             return None, f"model {m} not available", True
+        if r.status_code == 402:
+            return None, ("Google wants billing turned on for this key's project (HTTP 402). Make a free key at "
+                          "aistudio.google.com/apikey instead" + (f": {msg[:120]}" if msg else "")), True
         if r.status_code in (429, 503):
             last = "Gemini is busy or the free limit was reached"
             time.sleep(20 * (attempt + 1))
@@ -139,7 +147,7 @@ def _try(base, m, key, body, want_json, last):
         if r.status_code in (400, 401, 403):
             # Wrong address for this kind of key: let the caller try the other one.
             if any(w in msg.lower() for w in ("api key", "permission", "not enabled", "unauthenticated",
-                                               "credentials", "disabled")):
+                                               "credentials", "disabled", "blocked", "not been used")):
                 return None, f"Gemini refused the key: {msg}", True
             raise RuntimeError(f"Gemini refused the request: {msg}")
         last = f"HTTP {r.status_code} {msg[:120]}"
