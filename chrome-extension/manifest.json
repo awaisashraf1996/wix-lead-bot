@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "NA Developers Lead Capture",
+  "version": "1.2.0",
+  "description": "Capture business websites from Yellow Pages (or any directory page you are viewing) and send them to the Wix Lead Bot. Also tells you if the current site is built on Wix.",
+  "permissions": ["activeTab", "scripting", "storage", "downloads"],
+  "host_permissions": ["http://127.0.0.1:8765/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "NA Developers Lead Capture",
+    "default_icon": {"16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png"}
+  },
+  "icons": {"16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png"}
+}

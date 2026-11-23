@@ -1,0 +1,10 @@
+__pycache__/
+*.sqlite*
+config.json
+output/
+build/
+dist/
+*.spec
+yp_browser_data/
+WixLeadBot*.exe
+_update.bat

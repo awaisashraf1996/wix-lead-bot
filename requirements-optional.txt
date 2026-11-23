@@ -1,0 +1,3 @@
+# Optional extras. The build continues if one of these cannot install.
+duckdb>=1.1
+pywebview>=5

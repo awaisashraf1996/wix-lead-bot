@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --teal:#1f8fa3; --red:#e53935; --navy:#14202b; }
+  body { width: 330px; margin: 0; font: 13px "Segoe UI", Arial, sans-serif; color: var(--navy); }
+  header { background: var(--navy); color: #fff; padding: 10px 12px; display: flex; align-items: center; gap: 8px; }
+  header b { font-size: 14px; }
+  header span.logo { color: var(--teal); font: bold 16px Consolas, monospace; }
+  main { padding: 12px; }
+  .card { border: 1px solid #dde3e8; border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+  .label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #667; margin-bottom: 4px; }
+  .wix { font-weight: 600; }
+  .yes { color: #0b7a3e; } .no { color: #8a5a00; } .wait { color: #667; }
+  button { width: 100%; padding: 9px; border: 0; border-radius: 6px; font: 600 13px "Segoe UI", Arial; cursor: pointer; margin-top: 6px; }
+  button.primary { background: var(--teal); color: #fff; }
+  button.secondary { background: #eef2f5; color: var(--navy); }
+  button.danger { background: transparent; color: var(--red); font-weight: 500; }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 6px; } .row button { flex: 1; }
+  #msg { min-height: 18px; margin-top: 6px; font-size: 12px; }
+  #app { font-size: 12px; }
+  .big { font-size: 22px; font-weight: 700; }
+</style>
+</head>
+<body>
+<header><span class="logo">&lt;/&gt;</span><b>NA Developers Lead Capture</b></header>
+<main>
+  <div class="card">
+    <div class="label">This website</div>
+    <div id="wix" class="wix wait">Checking...</div>
+  </div>
+
+  <div class="card">
+    <div class="label">Capture from this page</div>
+    <div id="pageinfo" class="wait">Open a Yellow Pages results page, then click Capture.</div>
+    <button id="capture" class="primary">Capture websites on this page</button>
+  </div>
+
+  <div class="card">
+    <div class="label">Saved list</div>
+    <div><span id="count" class="big">0</span> websites waiting</div>
+    <div id="app" class="wait">Looking for the Wix Lead Bot app...</div>
+    <div class="row">
+      <button id="send" class="primary">Send to app</button>
+      <button id="download" class="secondary">Download .txt</button>
+    </div>
+    <button id="clear" class="danger">Clear saved list</button>
+    <div id="msg"></div>
+  </div>
+</main>
+<script src="popup.js"></script>
+</body>
+</html>

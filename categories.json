@@ -1,0 +1,733 @@
+{
+  "_note": "Each category maps to OpenStreetMap tags. 'tags' is a list of [key, value] pairs; a business matching ANY pair is included. Edit freely. 'tier' A = best fit for Wix redesign pitches (needs bookings/trust, decent budgets), B = good volume, C = lower budgets or fewer Wix sites. 'overture' is a list of regular-expression patterns matched against Overture Maps place categories (underscores become spaces).",
+  "dentist": {
+    "label": "Dentists & dental clinics",
+    "tier": "A",
+    "tags": [
+      [
+        "amenity",
+        "dentist"
+      ],
+      [
+        "healthcare",
+        "dentist"
+      ]
+    ],
+    "why": "High-value patients, need trust content, online booking and before/after galleries. Budgets are usually healthy.",
+    "overture": [
+      "\\bdent",
+      "orthodont",
+      "endodont",
+      "periodont"
+    ],
+    "short": "Dentists"
+  },
+  "chiropractor_physio": {
+    "label": "Chiropractors & physiotherapists",
+    "tier": "A",
+    "tags": [
+      [
+        "healthcare",
+        "physiotherapist"
+      ],
+      [
+        "healthcare:speciality",
+        "chiropractic"
+      ],
+      [
+        "healthcare",
+        "chiropractor"
+      ]
+    ],
+    "why": "Small owner-run clinics, often on Wix. Need booking, service pages and local SEO.",
+    "overture": [
+      "chiropract",
+      "physical therap",
+      "physiotherap",
+      "sports medicine"
+    ],
+    "short": "Chiropractors & physio"
+  },
+  "medical_clinic_medspa": {
+    "label": "Medical clinics, wellness & med spas",
+    "tier": "A",
+    "tags": [
+      [
+        "amenity",
+        "clinic"
+      ],
+      [
+        "healthcare",
+        "clinic"
+      ],
+      [
+        "healthcare",
+        "alternative"
+      ]
+    ],
+    "why": "Like your Oasis Healogy project: service-heavy, need clear treatment pages, FAQs and booking.",
+    "overture": [
+      "medical spa",
+      "med spa",
+      "medspa",
+      "\\bwellness",
+      "acupunct",
+      "naturopath",
+      "iv hydration",
+      "wound",
+      "family practice",
+      "medical clinic",
+      "weight loss"
+    ],
+    "short": "Clinics & med spas"
+  },
+  "hair_salon_barber": {
+    "label": "Hair salons & barbershops",
+    "tier": "B",
+    "tags": [
+      [
+        "shop",
+        "hairdresser"
+      ]
+    ],
+    "why": "Huge volume and many Wix users. Pitch Wix Bookings, gallery and mobile-first redesign.",
+    "overture": [
+      "hair salon",
+      "\\bbarber",
+      "hair stylist",
+      "hair care",
+      "\\bhair\\b"
+    ],
+    "short": "Hair salons & barbers"
+  },
+  "beauty_nails_spa": {
+    "label": "Beauty, nail, lash & massage studios",
+    "tier": "B",
+    "tags": [
+      [
+        "shop",
+        "beauty"
+      ],
+      [
+        "shop",
+        "massage"
+      ],
+      [
+        "leisure",
+        "spa"
+      ]
+    ],
+    "why": "Visual businesses that live on Instagram; often have dated or template-looking Wix sites.",
+    "overture": [
+      "nail salon",
+      "beauty salon",
+      "eyelash",
+      "\\blash",
+      "waxing",
+      "\\bmassage",
+      "day spa",
+      "\\bspa\\b",
+      "esthetic",
+      "skin care",
+      "brow"
+    ],
+    "short": "Beauty, nails & massage"
+  },
+  "fitness_yoga": {
+    "label": "Gyms, yoga, pilates & martial arts studios",
+    "tier": "A",
+    "tags": [
+      [
+        "leisure",
+        "fitness_centre"
+      ],
+      [
+        "sport",
+        "yoga"
+      ],
+      [
+        "sport",
+        "pilates"
+      ],
+      [
+        "sport",
+        "martial_arts"
+      ]
+    ],
+    "why": "Need class schedules, memberships (Wix Pricing Plans) and online booking.",
+    "overture": [
+      "\\bgym\\b",
+      "fitness",
+      "\\byoga",
+      "pilates",
+      "martial art",
+      "personal trainer",
+      "dance studio",
+      "boxing",
+      "crossfit"
+    ],
+    "short": "Gyms & yoga studios"
+  },
+  "restaurant_cafe": {
+    "label": "Restaurants, cafes & food trucks",
+    "tier": "C",
+    "tags": [
+      [
+        "amenity",
+        "restaurant"
+      ],
+      [
+        "amenity",
+        "cafe"
+      ],
+      [
+        "amenity",
+        "fast_food"
+      ]
+    ],
+    "why": "Very high volume but tight budgets. Pitch menu pages, online ordering and Google Maps visibility.",
+    "overture": [
+      "restaurant",
+      "\\bcafe",
+      "coffee",
+      "eatery",
+      "\\bdiner\\b",
+      "bistro",
+      "pizza",
+      "food truck"
+    ],
+    "short": "Restaurants & cafes"
+  },
+  "bakery_dessert": {
+    "label": "Bakeries, cake shops & dessert bars",
+    "tier": "B",
+    "tags": [
+      [
+        "shop",
+        "bakery"
+      ],
+      [
+        "shop",
+        "pastry"
+      ],
+      [
+        "shop",
+        "confectionery"
+      ]
+    ],
+    "why": "Custom cake orders need order forms and galleries; many run on Wix.",
+    "overture": [
+      "bakery",
+      "dessert",
+      "\\bcake",
+      "cupcake",
+      "ice cream",
+      "donut",
+      "chocolat",
+      "patisserie"
+    ],
+    "short": "Bakeries & desserts"
+  },
+  "home_services": {
+    "label": "Contractors & trades (plumbers, electricians, roofers, HVAC, painters)",
+    "tier": "A",
+    "tags": [
+      [
+        "craft",
+        "plumber"
+      ],
+      [
+        "craft",
+        "electrician"
+      ],
+      [
+        "craft",
+        "roofer"
+      ],
+      [
+        "craft",
+        "hvac"
+      ],
+      [
+        "craft",
+        "painter"
+      ],
+      [
+        "craft",
+        "carpenter"
+      ],
+      [
+        "craft",
+        "builder"
+      ]
+    ],
+    "why": "Each job is worth a lot, so a site that brings calls pays off fast. Pitch quote forms, service-area pages and reviews.",
+    "overture": [
+      "plumb",
+      "electrician",
+      "\\bhvac",
+      "roofing",
+      "contractor",
+      "handyman",
+      "painter",
+      "painting",
+      "carpent",
+      "flooring",
+      "home improvement",
+      "remodel",
+      "pest control",
+      "garage door",
+      "fence",
+      "pool service"
+    ],
+    "short": "Contractors & trades"
+  },
+  "landscaping": {
+    "label": "Landscaping, lawn care & garden centres",
+    "tier": "B",
+    "tags": [
+      [
+        "craft",
+        "gardener"
+      ],
+      [
+        "shop",
+        "garden_centre"
+      ]
+    ],
+    "why": "Seasonal businesses that need project galleries and quote requests.",
+    "overture": [
+      "landscap",
+      "\\blawn",
+      "gardener",
+      "tree service",
+      "snow removal",
+      "irrigation"
+    ],
+    "short": "Landscaping & lawn care"
+  },
+  "real_estate": {
+    "label": "Real estate agents & property managers",
+    "tier": "A",
+    "tags": [
+      [
+        "office",
+        "estate_agent"
+      ],
+      [
+        "office",
+        "property_management"
+      ]
+    ],
+    "why": "Personal-brand sites, often solo agents on Wix. Good budgets.",
+    "overture": [
+      "real estate",
+      "realtor",
+      "property management",
+      "home inspect"
+    ],
+    "short": "Real estate"
+  },
+  "lawyer": {
+    "label": "Law firms & lawyers",
+    "tier": "A",
+    "tags": [
+      [
+        "office",
+        "lawyer"
+      ]
+    ],
+    "why": "High-value clients; small firms often have outdated sites. Need practice-area pages and trust content.",
+    "overture": [
+      "lawyer",
+      "attorney",
+      "law firm",
+      "\\blegal",
+      "notar"
+    ],
+    "short": "Lawyers"
+  },
+  "accountant": {
+    "label": "Accountants, bookkeepers & tax preparers",
+    "tier": "A",
+    "tags": [
+      [
+        "office",
+        "accountant"
+      ],
+      [
+        "office",
+        "tax_advisor"
+      ]
+    ],
+    "why": "Like One Plus One Accounting: simple sites that need SEO and clear service pages.",
+    "overture": [
+      "accountant",
+      "accounting",
+      "bookkeep",
+      "\\btax\\b",
+      "tax prep"
+    ],
+    "short": "Accountants & tax"
+  },
+  "insurance_finance": {
+    "label": "Insurance agents & financial advisors",
+    "tier": "B",
+    "tags": [
+      [
+        "office",
+        "insurance"
+      ],
+      [
+        "office",
+        "financial_advisor"
+      ],
+      [
+        "office",
+        "financial"
+      ]
+    ],
+    "why": "Lead-generation focused; pitch quote forms and calculators.",
+    "overture": [
+      "insurance",
+      "financial advis",
+      "financial planning",
+      "mortgage",
+      "wealth"
+    ],
+    "short": "Insurance & finance"
+  },
+  "auto_services": {
+    "label": "Auto repair, detailing & car washes",
+    "tier": "B",
+    "tags": [
+      [
+        "shop",
+        "car_repair"
+      ],
+      [
+        "amenity",
+        "car_wash"
+      ],
+      [
+        "shop",
+        "tyres"
+      ]
+    ],
+    "why": "Local search matters a lot; booking forms and service menus.",
+    "overture": [
+      "auto repair",
+      "automotive",
+      "car wash",
+      "auto detail",
+      "body shop",
+      "\\btire",
+      "oil change",
+      "mechanic",
+      "towing"
+    ],
+    "short": "Auto services"
+  },
+  "pet_services": {
+    "label": "Vets, pet groomers, boarding & pet shops",
+    "tier": "B",
+    "tags": [
+      [
+        "amenity",
+        "veterinary"
+      ],
+      [
+        "shop",
+        "pet_grooming"
+      ],
+      [
+        "shop",
+        "pet"
+      ],
+      [
+        "amenity",
+        "animal_boarding"
+      ]
+    ],
+    "why": "Strong local loyalty; need booking and service pages.",
+    "overture": [
+      "pet groom",
+      "\\bpet\\b",
+      "veterinar",
+      "\\bdog\\b",
+      "kennel",
+      "animal"
+    ],
+    "short": "Pets & vets"
+  },
+  "photographer": {
+    "label": "Photographers & videographers",
+    "tier": "B",
+    "tags": [
+      [
+        "craft",
+        "photographer"
+      ],
+      [
+        "shop",
+        "photo"
+      ],
+      [
+        "craft",
+        "photographic_laboratory"
+      ]
+    ],
+    "why": "Portfolio-driven and very common on Wix. Pitch faster galleries and better mobile layouts.",
+    "overture": [
+      "photograph",
+      "videograph"
+    ],
+    "short": "Photographers"
+  },
+  "events_wedding": {
+    "label": "Event venues, wedding shops & planners",
+    "tier": "A",
+    "tags": [
+      [
+        "amenity",
+        "events_venue"
+      ],
+      [
+        "shop",
+        "wedding"
+      ],
+      [
+        "amenity",
+        "conference_centre"
+      ]
+    ],
+    "why": "Visual, high-ticket bookings; need galleries, packages and inquiry forms.",
+    "overture": [
+      "event plan",
+      "wedding",
+      "\\bvenue",
+      "party",
+      "caterer",
+      "catering",
+      "\\bflorist",
+      "\\bdj\\b"
+    ],
+    "short": "Events & weddings"
+  },
+  "church_nonprofit": {
+    "label": "Churches & nonprofits",
+    "tier": "C",
+    "tags": [
+      [
+        "amenity",
+        "place_of_worship"
+      ],
+      [
+        "office",
+        "ngo"
+      ],
+      [
+        "office",
+        "association"
+      ],
+      [
+        "office",
+        "charity"
+      ]
+    ],
+    "why": "Very common on Wix (like Anchor Christian Fellowship, It Starts With Me 2). Smaller budgets, but they need donations, events and volunteers.",
+    "overture": [
+      "church",
+      "religious",
+      "non profit",
+      "nonprofit",
+      "charity",
+      "mosque",
+      "synagogue",
+      "community center"
+    ],
+    "short": "Churches & nonprofits"
+  },
+  "childcare_education": {
+    "label": "Daycares, preschools, tutoring & music schools",
+    "tier": "B",
+    "tags": [
+      [
+        "amenity",
+        "childcare"
+      ],
+      [
+        "amenity",
+        "kindergarten"
+      ],
+      [
+        "amenity",
+        "music_school"
+      ],
+      [
+        "amenity",
+        "language_school"
+      ],
+      [
+        "amenity",
+        "driving_school"
+      ]
+    ],
+    "why": "Parents research online; need enrolment forms and trust content.",
+    "overture": [
+      "child care",
+      "day care",
+      "daycare",
+      "preschool",
+      "tutor",
+      "music school",
+      "driving school",
+      "learning center",
+      "montessori"
+    ],
+    "short": "Childcare & tutoring"
+  },
+  "boutique_retail": {
+    "label": "Boutiques, gift shops & florists",
+    "tier": "B",
+    "tags": [
+      [
+        "shop",
+        "clothes"
+      ],
+      [
+        "shop",
+        "boutique"
+      ],
+      [
+        "shop",
+        "gift"
+      ],
+      [
+        "shop",
+        "florist"
+      ],
+      [
+        "shop",
+        "jewelry"
+      ]
+    ],
+    "why": "Pitch Wix Stores e-commerce setup or redesign; many have weak online shops.",
+    "overture": [
+      "boutique",
+      "clothing",
+      "gift shop",
+      "jewelry",
+      "shoe store",
+      "home decor",
+      "furniture store",
+      "bridal"
+    ],
+    "short": "Boutiques & gifts"
+  },
+  "hospitality": {
+    "label": "B&Bs, guest houses, inns & small hotels",
+    "tier": "B",
+    "tags": [
+      [
+        "tourism",
+        "guest_house"
+      ],
+      [
+        "tourism",
+        "hotel"
+      ],
+      [
+        "tourism",
+        "motel"
+      ],
+      [
+        "tourism",
+        "chalet"
+      ]
+    ],
+    "why": "Direct bookings save them OTA fees; pitch booking engines and photo-led design.",
+    "overture": [
+      "\\bhotel",
+      "\\bmotel",
+      "bed and breakfast",
+      "\\binn\\b",
+      "guest house",
+      "resort",
+      "vacation rental",
+      "campground"
+    ],
+    "short": "B&Bs & small hotels"
+  },
+  "tattoo": {
+    "label": "Tattoo & piercing studios",
+    "tier": "C",
+    "tags": [
+      [
+        "shop",
+        "tattoo"
+      ]
+    ],
+    "why": "Portfolio-heavy, often on Wix; pitch galleries and booking deposits.",
+    "overture": [
+      "tattoo",
+      "piercing"
+    ],
+    "short": "Tattoo studios"
+  },
+  "funeral": {
+    "label": "Funeral homes",
+    "tier": "B",
+    "tags": [
+      [
+        "shop",
+        "funeral_directors"
+      ],
+      [
+        "amenity",
+        "funeral_hall"
+      ]
+    ],
+    "why": "Family-owned with steady budgets; often dated sites needing obituary pages.",
+    "overture": [
+      "funeral",
+      "cemetery",
+      "cremation",
+      "mortuar"
+    ],
+    "short": "Funeral homes"
+  },
+  "cleaning_movers": {
+    "label": "Dry cleaners, laundry, movers & storage",
+    "tier": "C",
+    "tags": [
+      [
+        "shop",
+        "dry_cleaning"
+      ],
+      [
+        "shop",
+        "laundry"
+      ],
+      [
+        "office",
+        "moving_company"
+      ],
+      [
+        "shop",
+        "storage_rental"
+      ]
+    ],
+    "why": "Simple service businesses; pitch quote forms and local SEO.",
+    "overture": [
+      "cleaning",
+      "\\bmaid",
+      "janitor",
+      "\\bmover",
+      "moving",
+      "self storage",
+      "junk removal"
+    ],
+    "short": "Cleaners & movers"
+  }
+}
