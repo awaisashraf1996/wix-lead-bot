@@ -1,0 +1,30 @@
+name: Copy partner badges as real PNG files
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/fetch-badges.yml"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          pip install pillow
+          mkdir -p assets/badges
+          python - <<'PY'
+          import urllib.request, io
+          from PIL import Image
+          base = "https://nadevelopers.com/wp-content/themes/na-developers/assets/img/badges/"
+          for n, h in {"wix":140,"google":96,"wordpress":60,"shopify":60,"woo":60,"designrush":56}.items():
+              req = urllib.request.Request(base + n + ".png", headers={"User-Agent": "Mozilla/5.0", "Accept": "image/png,image/*"})
+              im = Image.open(io.BytesIO(urllib.request.urlopen(req, timeout=30).read())).convert("RGBA")
+              im = im.resize((round(im.width * h / im.height), h), Image.LANCZOS)
+              im.save(f"assets/badges/{n}.png", optimize=True)
+              print(n, im.size)
+          PY
+      - run: |
+          git config user.name "NA Developers"; git config user.email info@nadevelopers.com
+          git add assets/badges && git commit -m "Partner badges as real PNG files" && git push || echo nothing
