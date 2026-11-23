@@ -31,9 +31,9 @@ DEFAULT_LOGO_LIGHT = ASSET + "logo_login_t.png"        # navy text, for white ba
 DEFAULT_MARK = ASSET + "mark64_t.png"
 DEFAULT_MARK_DARK = ASSET + "mark64_dark.png"
 DEFAULT_WORK = [
-    ["Cruise Cali", "Luxury travel", "https://nadevelopers.com/wp-content/uploads/2026/11/cruise-cali-cover-768x409.jpg"],
-    ["Great Details Auto Care", "Auto repair", "https://nadevelopers.com/wp-content/uploads/2026/11/great-details-auto-care-cover-768x409.jpg"],
-    ["Matador Roofing", "Roofing", "https://nadevelopers.com/wp-content/uploads/2026/11/matador-roofing-cover-768x409.jpg"],
+    ["Cruise Cali", "Luxury travel", ASSET + "work/cruise-cali.jpg"],
+    ["Great Details Auto Care", "Auto repair", ASSET + "work/great-details-auto-care.jpg"],
+    ["Matador Roofing", "Roofing", ASSET + "work/matador-roofing.jpg"],
 ]
 BADGES = ASSET + "badges/"  # real PNG copies (the site serves WebP, which many inboxes hide)
 DEFAULT_BRAND = {
