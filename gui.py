@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import json
 import os
 import queue
 import re
@@ -333,6 +334,17 @@ def sort_tree(tree, col):
 
 def short_label(label: str) -> str:
     return label.split(" (")[0]
+
+
+def marketing_text(m) -> str:
+    """Short badge text for what marketing a business already pays for."""
+    items = [x.strip() for x in (m or "").split(";") if x.strip()]
+    ads = [x.replace(" Pixel", "").replace("Google Ads", "Google") for x in items if x in W.ADS_LABELS]
+    if ads:
+        return "$ Ads: " + ", ".join(ads)
+    if "Google Analytics" in items or "Tag Manager" in items:
+        return "Analytics"
+    return "—"
 
 
 def level_text(level: str) -> str:
@@ -856,6 +868,8 @@ class App:
                     self.on_update(item[1], item[2])
                 elif kind == "toast":
                     self.toast(*item[1:])
+                elif kind == "call":
+                    item[1]()
                 elif kind == "image":
                     self.pages["leads"].profile.set_image(*item[1:])
         except queue.Empty:
@@ -911,62 +925,168 @@ class DashboardPage(Page):
     title = "Dashboard"
     subtitle = "Your lead machine at a glance"
 
+    STATS = [("biz", "Businesses found", NAVY, "⌕"), ("wix", "Wix websites", TEAL, "◆"),
+             ("super", "Super leads", RED, "★"), ("hot", "Hot leads", AMBER, "▲"),
+             ("emailed", "Emailed", "#7A5AF8", "✉"), ("replied", "Replied", GREEN, "↩"),
+             ("won", "Won", "#15803D", "✓")]
+
     def build(self):
+        # --- welcome banner + next best step
+        top = tk.Frame(self.body, bg=BG)
+        top.pack(fill="x")
+        top.columnconfigure(0, weight=3)
+        top.columnconfigure(1, weight=2)
+        nbg = "#0A1016" if THEME == "dark" else NAVY
+        ban = tk.Frame(top, bg=nbg)
+        ban.grid(row=0, column=0, sticky="nsew")
+        tk.Frame(ban, bg=TEAL, height=4).pack(side="bottom", fill="x")
+        bi = tk.Frame(ban, bg=nbg)
+        bi.pack(fill="both", expand=True, padx=20, pady=14)
+        self.hello = tk.Label(bi, bg=nbg, fg="white", font=F(15, "bold"), anchor="w")
+        self.hello.pack(anchor="w")
+        self.today = tk.Label(bi, bg=nbg, fg="#C9D3DD", font=F(10), anchor="w", justify="left")
+        self.today.pack(anchor="w", pady=(4, 10))
+        bb = tk.Frame(bi, bg=nbg)
+        bb.pack(anchor="w")
+        Btn(bb, text="✉  Open outreach", style="Primary.TButton",
+            command=lambda: self.app.show("outreach")).pack(side="left")
+        Btn(bb, text="⌕  Find leads", command=lambda: self.app.show("find")).pack(side="left", padx=8)
+        nxt = tk.Frame(top, bg=INFO, highlightthickness=1, highlightbackground=INFO_BORDER)
+        nxt.grid(row=0, column=1, sticky="nsew", padx=(12, 0))
+        ni = tk.Frame(nxt, bg=INFO)
+        ni.pack(fill="both", expand=True, padx=18, pady=14)
+        tk.Label(ni, text="NEXT BEST STEP", bg=INFO, fg=ACCENT_TXT, font=F(8, "bold")).pack(anchor="w")
+        self.next_lbl = tk.Label(ni, bg=INFO, fg=TEXT, font=F(11, "bold"), anchor="w", justify="left",
+                                 wraplength=360)
+        self.next_lbl.pack(anchor="w", pady=(4, 10))
+        self.next_btn = Btn(ni, text="Go", style="Dark.TButton")
+        self.next_btn.pack(anchor="w")
+
+        # --- stat cards with round icons
         row = tk.Frame(self.body, bg=BG)
-        row.pack(fill="x")
+        row.pack(fill="x", pady=(12, 0))
         self.stats = {}
-        specs = [("biz", "Businesses found", NAVY), ("wix", "Wix websites", TEAL),
-                 ("super", "Super leads", RED), ("hot", "Hot leads", AMBER),
-                 ("emailed", "Emailed", "#7A5AF8"), ("replied", "Replied", GREEN),
-                 ("won", "Won", "#15803D")]
-        for i, (key, label, col) in enumerate(specs):
-            c = card(row, pad=12)
+        for i, (key, label, col, glyph) in enumerate(self.STATS):
+            if col == NAVY and THEME == "dark":
+                col = "#5B7088"
+            c = card(row, pad=10)
             c.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 8, 0))
             row.columnconfigure(i, weight=1)
-            tk.Frame(c.inner, bg=col, height=4).pack(fill="x", pady=(0, 8))
-            v = tk.Label(c.inner, text="0", bg=CARD, fg=col, font=F(22, "bold"))
-            v.pack(anchor="w")
+            line = tk.Frame(c.inner, bg=CARD)
+            line.pack(fill="x")
+            ic = tk.Canvas(line, width=38, height=38, bg=CARD, highlightthickness=0)
+            ic.pack(side="right")
+            ic.create_oval(2, 2, 36, 36, fill=col, outline=col)
+            ic.create_text(19, 19, text=glyph, fill="white", font=F(13, "bold"))
+            v = tk.Label(line, text="0", bg=CARD, fg=col, font=F(19, "bold"))
+            v.pack(side="left", anchor="w")
             tk.Label(c.inner, text=label, bg=CARD, fg=MUTED, font=F(9)).pack(anchor="w")
             self.stats[key] = v
+
+        # --- map | tabs (best leads, replies, results) | to do
         mid = tk.Frame(self.body, bg=BG)
-        mid.pack(fill="both", expand=True, pady=(14, 0))
-        right = tk.Frame(mid, bg=BG, width=340)
-        right.pack(side="right", fill="y", padx=(14, 0))
+        mid.pack(fill="both", expand=True, pady=(12, 0))
+        right = tk.Frame(mid, bg=BG, width=250)
+        right.pack(side="right", fill="y", padx=(12, 0))
         right.pack_propagate(False)
-        left = card(mid, "Best leads right now", "Double-click a lead to open its profile.")
-        left.pack(side="left", fill="both", expand=True)
-        fr, self.tree = make_tree(left.inner, [("level", "Level", 90), ("name", "Business", 260),
-                                               ("loc", "Location", 150), ("score", "Score", 60),
-                                               ("email", "Email", 210)], height=14)
-        fr.pack(fill="both", expand=True)
+        mp = card(mid, "Leads on the map", pad=12)
+        mp.pack(side="left", fill="y")
+        self.map = tk.Canvas(mp.inner, width=290, height=213, bg=CARD, highlightthickness=0)
+        self.map.pack()
+        self.map_info = tk.Label(mp.inner, bg=CARD, fg=MUTED, font=F(8), anchor="w", justify="left")
+        self.map_info.pack(anchor="w", pady=(6, 0))
+        tk.Label(mp.inner, text="TOP AREAS", bg=CARD, fg=MUTED, font=F(8, "bold")).pack(anchor="w", pady=(10, 2))
+        self.top_box = tk.Frame(mp.inner, bg=CARD)
+        self.top_box.pack(fill="x")
+        self._map_img = None
+        tabs = card(mid, pad=10)
+        tabs.pack(side="left", fill="both", expand=True, padx=(12, 0))
+        nb = ttk.Notebook(tabs.inner)
+        nb.pack(fill="both", expand=True)
+        t1 = tk.Frame(nb, bg=CARD)
+        nb.add(t1, text=" Best leads ")
+        fr, self.tree = make_tree(t1, [("level", "Level", 70), ("name", "Business", 150),
+                                       ("loc", "Location", 90), ("score", "Score", 45),
+                                       ("mk", "Marketing", 110)], height=10)
+        fr.pack(fill="both", expand=True, pady=(6, 0))
         self.tree.bind("<Double-1>", lambda e: self.app.open_profile(self.tree.focus()))
-        today = card(right, "Today")
-        today.pack(fill="x")
-        self.today = tk.Label(today.inner, bg=CARD, justify="left", anchor="w", font=F(10))
-        self.today.pack(fill="x", pady=(6, 10))
-        Btn(today.inner, text="Open outreach queue", style="Primary.TButton",
-                   command=lambda: self.app.show("outreach")).pack(fill="x")
-        legend = card(right, "Lead levels")
-        legend.pack(fill="x", pady=(14, 0))
-        for lvl, txt in (("super", f"Score {W.SUPER_SCORE}+ and an email address. Contact first."),
-                         ("hot", f"Score {W.HOT_SCORE}+ and an email or phone."),
-                         ("normal", "Fewer problems found. Contact when you have time.")):
-            r = tk.Frame(legend.inner, bg=CARD)
-            r.pack(fill="x", pady=4)
-            badge(r, W.LEVELS[lvl][0], LEVEL_COLOR[lvl]).pack(anchor="w")
-            tk.Label(r, text=txt, bg=CARD, fg=MUTED, font=F(9), wraplength=280,
-                     justify="left").pack(anchor="w", pady=(2, 0))
+        t2 = tk.Frame(nb, bg=CARD)
+        nb.add(t2, text=" Replies ")
+        fr3, self.rep_tree = make_tree(t2, [("when", "When", 90), ("name", "From", 200),
+                                           ("kind", "Type", 100), ("text", "Message", 300)], height=10)
+        fr3.pack(fill="both", expand=True, pady=(6, 0))
+        self.rep_tree.bind("<Double-1>", lambda e: self.app.show("outreach", view="replies"))
+        t3 = tk.Frame(nb, bg=CARD)
+        nb.add(t3, text=" By category ")
+        fr2, self.res_tree = make_tree(t3, [("cat", "Category", 200), ("em", "Emailed", 75),
+                                            ("rep", "Replied", 75), ("rr", "Reply %", 70),
+                                            ("bk", "Calls", 60), ("won", "Won", 60)], height=10)
+        fr2.pack(fill="both", expand=True, pady=(6, 0))
         todo = card(right, "To do")
-        todo.pack(fill="both", expand=True, pady=(14, 0))
+        todo.pack(fill="both", expand=True)
         self.todo_box = tk.Frame(todo.inner, bg=CARD)
         self.todo_box.pack(fill="both", expand=True)
-        res = card(left.inner.master.master, "Results by category",
-                   "Which niches reply and buy. Use it to decide where to search next.")
-        res.pack(side="bottom", fill="x", pady=(12, 0), before=left)
-        fr2, self.res_tree = make_tree(res.inner, [("cat", "Category", 220), ("em", "Emailed", 80),
-                                                   ("rep", "Replied", 80), ("rr", "Reply %", 70),
-                                                   ("bk", "Calls", 70), ("won", "Won", 70)], height=4)
-        fr2.pack(fill="x")
+
+    # ---------------- map ----------------
+    def draw_map(self, recs):
+        cv = self.map
+        cv.delete("all")
+        try:
+            with open(os.path.join(ASSETS, "na_map.json"), encoding="utf-8") as f:
+                meta = json.load(f)
+            from PIL import Image, ImageTk
+            im = Image.open(os.path.join(ASSETS, f"na_map_{'dark' if THEME == 'dark' else 'light'}.png"))
+        except Exception:
+            cv.create_text(180, 130, text="Map not available", fill=MUTED)
+            return
+        w, h = 290, int(290 * im.height / im.width)
+        cv.config(width=w, height=h)
+        self._map_img = ImageTk.PhotoImage(im.resize((w, h), Image.LANCZOS))
+        cv.create_image(0, 0, image=self._map_img, anchor="nw")
+        by = {}
+        for r in recs:
+            code = r.get("region") or ""
+            if code in W.REGIONS:
+                d = by.setdefault(code, [0, 0])
+                d[0] += 1
+                d[1] += r["level"] == "super"
+        cent = meta.get("centroids", {})
+        biggest = max([v[0] for v in by.values()] or [1])
+        other = 0
+        for code, (n, sup) in sorted(by.items(), key=lambda kv: -kv[1][0]):
+            pos = cent.get(W.REGIONS[code])
+            if not pos:
+                other += n
+                continue
+            x, y = pos[0] * w, pos[1] * h
+            rad = 7 + 11 * (n / biggest) ** 0.5
+            col = RED if sup else TEAL
+            tag = f"r_{code}"
+            cv.create_oval(x - rad, y - rad, x + rad, y + rad, fill=col, outline="white", width=2, tags=(tag,))
+            cv.create_text(x, y, text=str(n) if n < 1000 else f"{n // 1000}k", fill="white",
+                           font=F(8 if n < 100 else 7, "bold"), tags=(tag,))
+            cv.tag_bind(tag, "<Button-1>", lambda e, c=code: self.app.show("leads", region=c))
+            cv.tag_bind(tag, "<Enter>", lambda e, c=code, n=n, s=sup: self.map_info.config(
+                text=f"{W.REGIONS[c]}: {n} Wix lead{'s' if n != 1 else ''}, {s} Super"))
+            cv.tag_bind(tag, "<Leave>", lambda e: self.map_info.config(text=self._map_hint))
+            cv.config(cursor="hand2")
+        self._map_hint = ("Click a circle to see those leads.\n● red = has Super leads  ● teal = others" if by else
+                          "Your leads will appear here after your first search.")
+        if other:
+            self._map_hint += f"\n{other} more in Alaska/Hawaii/territories"
+        self.map_info.config(text=self._map_hint)
+        for w in self.top_box.winfo_children():
+            w.destroy()
+        for code, (n, sup) in sorted(by.items(), key=lambda kv: (-kv[1][1], -kv[1][0]))[:5]:
+            r = tk.Frame(self.top_box, bg=CARD, cursor="hand2")
+            r.pack(fill="x", pady=1)
+            a = tk.Label(r, text=W.REGIONS[code], bg=CARD, fg=TEXT, font=F(9, "bold"), cursor="hand2")
+            a.pack(side="left")
+            b = tk.Label(r, text=f"{n} leads · {sup} Super", bg=CARD, fg=RED if sup else MUTED, font=F(9),
+                         cursor="hand2")
+            b.pack(side="right")
+            for w in (r, a, b):
+                w.bind("<Button-1>", lambda e, c=code: self.app.show("leads", region=c))
 
     def refresh(self, **kw):
         db = self.db
@@ -984,50 +1104,86 @@ class DashboardPage(Page):
         for k, v in vals.items():
             self.stats[k].config(text=f"{v:,}")
         s = O.settings(self.app.cfg)
-        self.today.config(text=(f"✉  Sent today: {c['_sent_today']} of {s['daily_limit']}\n"
-                                f"✎  Drafts waiting for you: {c['_drafts']}\n"
-                                f"✓  Approved to send: {c['_approved']}\n"
-                                f"↩  Replies to answer: {c['replied']}"))
-        for w in self.todo_box.winfo_children():
-            w.destroy()
-        items = []
+        hour = dt.datetime.now().hour
+        part = "morning" if hour < 12 else "afternoon" if hour < 18 else "evening"
+        self.hello.config(text=f"Good {part}, {(s.get('sender_name') or 'there').split()[0]}")
+        self.today.config(text=(f"✉  Sent today {c['_sent_today']} of {s['daily_limit']}     "
+                                f"✎  {c['_drafts']} drafts to check     ✓  {c['_approved']} approved     "
+                                f"↩  {c['replied']} replies to answer"))
+        status = {d: st for d, st in db.q("SELECT domain, status FROM outreach")}
+        fresh = [r for r in recs if status.get(r["domain"], "new") == "new"]
+        fresh_super = sum(r["level"] == "super" for r in fresh)
         nrep = db.q("SELECT COUNT(*) FROM replies r JOIN outreach o ON o.domain=r.domain WHERE r.handled=0"
                     " AND r.kind IN ('interested','question','other') AND o.status IN ('replied','later')")[0][0]
         if nrep:
-            items.append((f"↩  Answer {nrep} repl{'y' if nrep == 1 else 'ies'}", lambda: self.app.show("outreach", view="replies"), None))
+            step, cmd, btn = (f"{nrep} repl{'y is' if nrep == 1 else 'ies are'} waiting for an answer.",
+                              lambda: self.app.show("outreach", view="replies"), "Answer replies")
+        elif c["_drafts"]:
+            step, cmd, btn = (f"{c['_drafts']} emails are drafted. Check and approve them.",
+                              lambda: self.app.show("outreach"), "Review drafts")
+        elif fresh_super:
+            step, cmd, btn = (f"{fresh_super} Super leads haven't been emailed yet. Let Gemini write to them.",
+                              lambda: self.app.show("outreach"), "Write emails")
+        elif not recs:
+            step, cmd, btn = ("Start by finding Wix websites in a state and category.",
+                              lambda: self.app.show("find"), "Find leads")
+        else:
+            step, cmd, btn = ("All caught up. Search a new state or category for more leads.",
+                              lambda: self.app.show("coverage"), "See what's searched")
+        self.next_lbl.config(text=step)
+        self.next_btn.config(text=btn + "  →", command=cmd)
+        self.draw_map(recs)
+
+        for w in self.todo_box.winfo_children():
+            w.destroy()
+        items = []
+        if nrep:
+            items.append((f"↩  Answer {nrep} repl{'y' if nrep == 1 else 'ies'}",
+                          lambda: self.app.show("outreach", view="replies"), None))
         nb = c.get("call_booked", 0)
         if nb:
-            items.append((f"☎  {nb} call{'s' if nb > 1 else ''} booked, open the call brief", lambda: self.app.show("pipeline"), None))
+            items.append((f"☎  {nb} call{'s' if nb > 1 else ''} booked, open the call brief",
+                          lambda: self.app.show("pipeline"), None))
         names = {r["domain"]: (r["name"] or r["domain"]) for r in recs}
-        for tid, dom, kind, due in O.due_tasks(db)[:6]:
+        for tid, dom, kind, due in O.due_tasks(db)[:8]:
             items.append((f"★  {O.TASK_LABELS.get(kind, kind)}: {names.get(dom, dom)}",
-                           lambda d=dom: self.app.open_profile(d), tid))
+                          lambda d=dom: self.app.open_profile(d), tid))
         if not items:
             tk.Label(self.todo_box, text="Nothing waiting. Find or email more leads.", bg=CARD, fg=MUTED,
-                     font=F(9)).pack(anchor="w")
+                     font=F(9), wraplength=210, justify="left").pack(anchor="w")
         for text, cmd, tid in items:
             r = tk.Frame(self.todo_box, bg=CARD)
-            r.pack(fill="x", pady=2)
+            r.pack(fill="x", pady=3)
             lb = tk.Label(r, text=text, bg=CARD, fg=ACCENT_TXT, cursor="hand2", font=F(9, "bold"),
-                          wraplength=230, justify="left", anchor="w")
+                          wraplength=160, justify="left", anchor="w")
             lb.pack(side="left", fill="x", expand=True)
             lb.bind("<Button-1>", lambda e, c=cmd: c())
             if tid:
-                Btn(r, text="Done", width=5, command=lambda t=tid: (O.done_task(db, t), self.refresh())).pack(side="right")
+                Btn(r, text="Done", width=5,
+                    command=lambda t=tid: (O.done_task(db, t), self.refresh())).pack(side="right")
+
         self.res_tree.delete(*self.res_tree.get_children())
         for row in O.funnel(db):
             lab = self.app.cats.get(row["category"], {}).get("short") or row["category"].replace("_", " ").title()
             self.res_tree.insert("", "end", values=(lab, row["emailed"], row["replied"],
                                                     f"{100 * row['replied'] / row['emailed']:.0f}%" if row["emailed"] else "-",
                                                     row["booked"], row["won"]))
+        self.rep_tree.delete(*self.rep_tree.get_children())
+        try:
+            reps = db.q("SELECT domain, from_addr, kind, snippet, received_at FROM replies "
+                        "ORDER BY received_at DESC LIMIT 30")
+        except Exception:
+            reps = []
+        for i, (dom, frm, kind, snip, when) in enumerate(reps):
+            self.rep_tree.insert("", "end", iid=f"rep{i}", values=(
+                (when or "")[:10], names.get(dom, frm or dom), (kind or "").replace("_", " "),
+                " ".join((snip or "").split())[:120]))
         self.tree.delete(*self.tree.get_children())
-        status = {d: s for d, s in db.q("SELECT domain, status FROM outreach")}
-        best = [r for r in recs if status.get(r["domain"], "new") in ("new",)][:40]
-        for r in best:
+        for r in fresh[:40]:
             self.tree.insert("", "end", iid=r["domain"], tags=(r["level"],), values=(
                 level_text(r["level"]), r["name"] or r.get("site_name") or r["domain"],
                 ", ".join(x for x in (r.get("city"), (r.get("region") or "")[3:]) if x),
-                r["score"] or 0, (r["emails"] or "—").split(";")[0]))
+                r["score"] or 0, marketing_text(r.get("marketing"))))
 
 
 # ---------------------------------------------------------------------------
@@ -1447,7 +1603,7 @@ class LeadsPage(Page):
                 self.cat_cb = cb
         self.femail = tk.StringVar(value="Any contact")
         cbe = ttk.Combobox(bar, textvariable=self.femail, state="readonly", width=17,
-                           values=["Any contact", "Has email", "No email (call list)"])
+                           values=["Any contact", "Has email", "No email (call list)", "Runs ads ($)"])
         cbe.pack(side="left", padx=8)
         cbe.bind("<<ComboboxSelected>>", lambda ev: self.fill())
         Btn(bar, text="Export CSV", command=self.export).pack(side="right")
@@ -1460,7 +1616,7 @@ class LeadsPage(Page):
         fr, self.tree = make_tree(lc.inner, [("level", "Level", 80), ("name", "Business", 200),
                                              ("loc", "Location", 110), ("cat", "Category", 120),
                                              ("score", "Score", 50), ("email", "Email", 170),
-                                             ("status", "Status", 90)], height=20)
+                                             ("mk", "Marketing", 100), ("status", "Status", 90)], height=20)
         fr.pack(fill="both", expand=True)
         self.tree.bind("<<TreeviewSelect>>", self.on_select)
         pw.add(lc, weight=3)
@@ -1481,10 +1637,17 @@ class LeadsPage(Page):
             self.pw.sashpos(0, max(420, e.width - 500))
             self._sash_done = True
 
-    def refresh(self, select=None, **kw):
+    def refresh(self, select=None, region=None, **kw):
         regs = sorted({r for (r,) in self.db.q("SELECT DISTINCT region FROM businesses")
                        if r and r in W.REGIONS})
         self.region_cb.config(values=["All regions"] + [W.REGIONS[r] for r in regs])
+        if region in W.REGIONS:
+            self.fsearch.set("")
+            self.flevel.set("All levels")
+            self.fcat.set("All categories")
+            self.fstatus.set("Any status")
+            self.femail.set("Any contact")
+            self.fregion.set(W.REGIONS[region])
         cats = sorted({c for (c,) in self.db.q("SELECT DISTINCT category FROM businesses") if c})
         self.cat_cb.config(values=["All categories"] + [self.cat_label(c) for c in cats])
         if select:
@@ -1531,6 +1694,8 @@ class LeadsPage(Page):
                 continue
             if self.femail.get().startswith("No email") and r["emails"]:
                 continue
+            if self.femail.get().startswith("Runs ads") and not marketing_text(r.get("marketing")).startswith("$"):
+                continue
             name = r["name"] or r.get("site_name") or r["domain"]
             if q and q not in f"{name} {r['domain']} {r.get('city') or ''} {r.get('emails') or ''}".lower():
                 continue
@@ -1539,7 +1704,8 @@ class LeadsPage(Page):
                 level_text(r["level"]), name,
                 ", ".join(x for x in (r.get("city"), (r.get("region") or "")[3:]) if x),
                 self.cat_label(r["category"] or ""), r["score"] or 0,
-                (r["emails"] or "—").split(";")[0], O.STATUS_LABELS.get(s, s)))
+                (r["emails"] or "—").split(";")[0], marketing_text(r.get("marketing")),
+                O.STATUS_LABELS.get(s, s)))
         for w in self.legend.winfo_children():
             w.destroy()
         for k in ("super", "hot", "normal"):
@@ -1629,6 +1795,8 @@ class Profile:
 
     def show(self, lead: dict):
         self.lead = lead
+        if lead.get("marketing") is None and lead.get("final_url"):
+            self._check_marketing(lead["domain"], lead["final_url"])
         self.clear()
         b = self.sf.body
         lvl = lead["level"]
@@ -1696,6 +1864,23 @@ class Profile:
         c = self.section("Contact")
         site = lead.get("final_url") or lead.get("website")
         self.kv(c, "Website", lambda f: link(f, site, site).pack(anchor="w"))
+        mk = [x.strip() for x in (lead.get("marketing") or "").split(";") if x.strip()]
+
+        def mkt(f):
+            if not mk:
+                tk.Label(f, text="No ads, pixels or analytics found on the site.", bg=CARD, fg=MUTED,
+                         font=F(9)).pack(anchor="w")
+                return
+            r = tk.Frame(f, bg=CARD)
+            r.pack(anchor="w")
+            for x in mk:
+                badge(r, ("$ " if x in W.ADS_LABELS else "") + x, RED if x in W.ADS_LABELS else TEAL).pack(
+                    side="left", padx=(0, 4))
+            if any(x in W.ADS_LABELS for x in mk):
+                tk.Label(f, text="They pay for ads, and every click lands on this website. Say so on the call: "
+                         "a better site makes the same ad spend bring in more customers.", bg=CARD, fg=MUTED,
+                         font=F(9), wraplength=420, justify="left").pack(anchor="w", pady=(4, 0))
+        self.kv(c, "Marketing", mkt)
         emails = [e.strip() for e in (lead.get("emails") or "").split(";") if e.strip()]
         srcs = {}
         for part in (lead.get("email_sources") or "").split(";"):
@@ -1872,6 +2057,24 @@ class Profile:
         key = S.get_secret(self.app.cfg, "psi_key")
         self.app.run_job("Auditing website", lambda: A.run(self.db, lead, key, O.settings(self.app.cfg)),
                          after=lambda res: self._reshow(lead["domain"]))
+
+    def _check_marketing(self, domain, url):
+        """Older leads were checked before ads/pixel detection existed: look once."""
+        if domain in getattr(self, "_mk_busy", set()):
+            return
+        self._mk_busy = getattr(self, "_mk_busy", set()) | {domain}
+
+        def go():
+            try:
+                import requests
+                r = requests.get(url, timeout=15, headers={"User-Agent": W.USER_AGENT})
+                found = "; ".join(W.detect_marketing(r.text))
+            except Exception:
+                found = ""
+            self.db.x("UPDATE sites SET marketing=? WHERE domain=?", (found, domain))
+            if found:
+                self.app.q.put(("call", lambda: self._reshow(domain)))
+        threading.Thread(target=go, daemon=True).start()
 
     def _reshow(self, domain):
         if self.lead and self.lead["domain"] == domain:

@@ -172,6 +172,9 @@ def _lead_facts(lead: dict, audit_data: dict | None) -> str:
         f"Homepage title: {lead.get('title') or ''}",
         f"Description on site: {(lead.get('meta_desc') or '')[:300]}",
         f"Google mobile scores: {json.dumps(sc) if sc else 'not tested'}",
+        f"Marketing found on the site: {lead.get('marketing') or 'none'}"
+        + (" (they PAY for ads that send visitors to this website: a weak site wastes that ad money)"
+           if any(x in (lead.get('marketing') or '') for x in W.ADS_LABELS) else ""),
         "Problems found:\n- " + "\n- ".join(findings),
     ])
 

@@ -67,7 +67,7 @@ if getattr(sys, "frozen", False):          # running as WixLeadBot.exe
 else:
     HERE = os.path.dirname(os.path.abspath(__file__))
     BUNDLED = HERE
-VERSION = "1.7.0"
+VERSION = "1.7.1"
 # GitHub "owner/repo" whose Releases hold new versions of WixLeadBot.exe
 UPDATE_REPO = "awaisashraf1996/wix-lead-bot"
 
@@ -240,13 +240,29 @@ EXTRA_COLUMNS = {
     "businesses": {"domain": "TEXT", "email": "TEXT", "extra": "TEXT"},
     "sites": {"site_name": "TEXT", "meta_desc": "TEXT", "og_image": "TEXT",
               "address": "TEXT", "geo_region": "TEXT", "has_booking": "INTEGER",
-              "no_solicit": "INTEGER"},
+              "no_solicit": "INTEGER", "marketing": "TEXT"},
 }
 SITE_COLS = ["domain", "final_url", "status", "is_wix", "wix_signals", "emails",
              "email_sources", "phones", "socials", "title", "has_meta_desc",
              "has_h1", "word_count", "copyright_year", "free_domain", "score",
              "issues", "checked_at", "site_name", "meta_desc", "og_image",
-             "address", "geo_region", "has_booking", "no_solicit"]
+             "address", "geo_region", "has_booking", "no_solicit", "marketing"]
+
+# Marketing the business already pays for. A business that runs ads has a budget,
+# and every ad click lands on the weak website we want to fix.
+MARKETING_RE = [
+    ("Google Ads", re.compile(r"googleadservices\.com|['\"=]AW-\d{6,}|googleAdsConversion|google_conversion_id", re.I)),
+    ("Meta Pixel", re.compile(r"connect\.facebook\.net/[^\"']*/fbevents\.js|fbq\(['\"]init|facebook\.com/tr\?|\"facebookPixel(Id)?\"\s*:\s*\"\d", re.I)),
+    ("TikTok Pixel", re.compile(r"analytics\.tiktok\.com|ttq\.load\(", re.I)),
+    ("Google Analytics", re.compile(r"gtag/js\?id=(G|UA)-|['\"]G-[A-Z0-9]{8,}['\"]|['\"]UA-\d{4,}-\d+|google-analytics\.com/(analytics|ga)\.js|\"googleAnalytics(Id)?\"\s*:\s*\"[GU]", re.I)),
+    ("Tag Manager", re.compile(r"googletagmanager\.com/gtm\.js|['\"]GTM-[A-Z0-9]{4,}", re.I)),
+    ("Live chat", re.compile(r"tawk\.to|intercom(cdn)?\.|livechatinc\.com|crisp\.chat|wix-chat|wixChat|drift\.com|tidio", re.I)),
+]
+ADS_LABELS = ("Google Ads", "Meta Pixel", "TikTok Pixel")
+
+
+def detect_marketing(html: str) -> list[str]:
+    return [name for name, rx in MARKETING_RE if rx.search(html or "")]
 
 # Lead levels (colours are used by the app)
 LEVELS = {"super": ("Super", "#E8222B"), "hot": ("Hot", "#F08C2E"),
@@ -975,6 +991,9 @@ def check_site(website: str, fetcher: PoliteFetcher) -> dict:
             if p not in phones:
                 phones.insert(0, p)
     score, issues, meta = score_site(html, final_url, emails)
+    marketing = detect_marketing(html)
+    if any(m in ADS_LABELS for m in marketing):
+        score += 8      # paying for ads = has budget, and the ads land on this website
     if not has_booking:
         issues.append("No online booking button found")
     desc_m = META_DESC_RE.search(html) or META_DESC_RE2.search(html)
@@ -986,6 +1005,7 @@ def check_site(website: str, fetcher: PoliteFetcher) -> dict:
         "geo_region": guess_site_region(html, structured, phones),
         "has_booking": int(has_booking),
         "no_solicit": int(bool(NO_SOLICIT_RE.search(visible_text(html)))),
+        "marketing": "; ".join(marketing),
     })
     result.update({
         "emails": "; ".join(emails[:5]),
