@@ -69,7 +69,7 @@ else:
     BUNDLED = HERE
 VERSION = "1.4.0"
 # GitHub "owner/repo" whose Releases hold new versions of WixLeadBot.exe
-UPDATE_REPO = ""
+UPDATE_REPO = "awaisashraf1996/wix-lead-bot"
 
 # The window app sets these to show progress and to stop a run.
 LOG_HOOK = None
