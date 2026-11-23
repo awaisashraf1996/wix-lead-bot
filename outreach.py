@@ -977,6 +977,153 @@ def _fetch(im, mid) -> bytes:
     return b"".join(p[1] for p in data if isinstance(p, tuple))
 
 
+def _sender_matches(frm: str, to_addr: str | None, site_dom: str) -> bool:
+    """IMAP's FROM search matches any part of the address ('ace.com' also finds
+    'grace.com'), so check the sender properly before calling it a reply."""
+    frm = (frm or "").lower()
+    if to_addr and frm == to_addr.lower():
+        return True
+    dom = frm.rsplit("@", 1)[-1]
+    site_dom = (site_dom or "").lower().removeprefix("www.")
+    return bool(site_dom) and not site_dom.endswith("wixsite.com") and (dom == site_dom or dom.endswith("." + site_dom))
+
+
+def _msg_date(raw: bytes):
+    import email as _email
+    try:
+        d = email.utils.parsedate_to_datetime(_email.message_from_bytes(raw).get("Date"))
+        return d.astimezone().replace(tzinfo=None) if d else None   # local time, like W.now()
+    except Exception:
+        return None
+
+
+def _in_reply_to(raw: bytes) -> str:
+    import email as _email
+    m = _email.message_from_bytes(raw)
+    return " ".join([m.get("In-Reply-To") or "", m.get("References") or ""])
+
+
+def clean_false_replies(db: W.DB) -> int:
+    """Undo 'replied' marks that came from emails that weren't really from the lead.
+    (Real replies from another address are found again by their email thread.)"""
+    init(db)
+    fixed = 0
+    for rid, domain, frm in db.q("SELECT id, domain, from_addr FROM replies"):
+        if domain.startswith("inquiry-") or "@" in domain:
+            continue
+        o = get_outreach(db, domain) or {}
+        if not _sender_matches(frm, o.get("to_addr"), domain.split("/")[0]):
+            db.x("DELETE FROM replies WHERE id=?", (rid,))
+            fixed += 1
+    for (domain,) in db.q("SELECT domain FROM outreach WHERE status IN ('replied','later','lost')"):
+        if not db.q("SELECT 1 FROM replies WHERE domain=?", (domain,)) and \
+                db.q("SELECT 1 FROM messages WHERE domain=? AND status='sent'", (domain,)):
+            db.x("UPDATE outreach SET status='emailed' WHERE domain=?", (domain,))
+    return fixed
+
+
+def _imap(cfg):
+    import security
+    s = settings(cfg)
+    pw = security.get_secret(cfg, "smtp_password")
+    if not (s["imap_host"] and pw):
+        raise RuntimeError("Add your email account in Settings > Email account first.")
+    im = imaplib.IMAP4_SSL(s["imap_host"], int(s["imap_port"]))
+    im.login(s["email"], pw)
+    return im
+
+
+def lead_for_sender(db: W.DB, frm: str, refs: str = "") -> str | None:
+    """Which lead (domain) an email is from, or None."""
+    frm = (frm or "").lower()
+    for domain, to_addr in db.q("SELECT domain, to_addr FROM outreach"):
+        if _sender_matches(frm, to_addr, domain.split("/")[0]):
+            return domain
+    if refs.strip():
+        for domain, msgid in db.q("SELECT domain, msgid FROM messages WHERE msgid IS NOT NULL"):
+            if msgid in refs:
+                return domain
+    return None
+
+
+def inbox_list(db: W.DB, cfg, limit: int = 80, folder: str = "INBOX") -> list[dict]:
+    """The newest emails in your inbox, each matched to a lead when it is from one."""
+    import email as _email
+    from email.header import decode_header, make_header
+    im = _imap(cfg)
+    try:
+        im.select(folder, readonly=True)
+        typ, data = im.uid("search", None, "ALL")
+        uids = data[0].split()[-limit:] if typ == "OK" and data and data[0] else []
+        out = []
+        if not uids:
+            return out
+        typ, data = im.uid("fetch", b",".join(uids).decode(),
+                           "(FLAGS BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE IN-REPLY-TO REFERENCES "
+                           "AUTO-SUBMITTED X-AUTOREPLY PRECEDENCE)])")
+        for part in data or []:
+            if not isinstance(part, tuple):
+                continue
+            meta = part[0].decode("utf-8", "ignore")
+            uid = re.search(r"UID (\d+)", meta)
+            m = _email.message_from_bytes(part[1])
+            try:
+                subject = str(make_header(decode_header(m.get("Subject", ""))))
+            except Exception:
+                subject = m.get("Subject", "")
+            name, addr = email.utils.parseaddr(m.get("From", ""))
+            try:
+                name = str(make_header(decode_header(name)))
+            except Exception:
+                pass
+            refs = " ".join([m.get("In-Reply-To") or "", m.get("References") or ""])
+            d = None
+            try:
+                d = email.utils.parsedate_to_datetime(m.get("Date")).astimezone()
+            except Exception:
+                pass
+            out.append({"uid": uid.group(1) if uid else "", "from": addr.lower(), "name": name or addr,
+                        "subject": subject or "(no subject)", "date": d.strftime("%d %b %H:%M") if d else "",
+                        "ts": d.timestamp() if d else 0, "unread": "\\Seen" not in meta,
+                        "auto": is_auto_reply(part[1]), "refs": refs,
+                        "lead": lead_for_sender(db, addr, refs)})
+        out.sort(key=lambda x: x["ts"], reverse=True)
+        return out
+    finally:
+        try:
+            im.logout()
+        except Exception:
+            pass
+
+
+def inbox_read(cfg, uid: str, folder: str = "INBOX") -> dict:
+    """Full text of one email (without marking it as read)."""
+    import email as _email
+    im = _imap(cfg)
+    try:
+        im.select(folder, readonly=True)
+        typ, data = im.uid("fetch", uid, "(BODY.PEEK[]<0.200000>)")
+        raw = b"".join(p[1] for p in data if isinstance(p, tuple))
+        m = _email.message_from_bytes(raw)
+        frm, subject, _ = _message_text(raw)
+        full = ""
+        for part in (m.walk() if m.is_multipart() else [m]):
+            if part.get_content_type() in ("text/plain", "text/html") and not part.get_filename():
+                try:
+                    t = (part.get_payload(decode=True) or b"").decode(part.get_content_charset() or "utf-8", "ignore")
+                except Exception:
+                    continue
+                full = W.visible_text(t) if part.get_content_type() == "text/html" else t
+                if part.get_content_type() == "text/plain":
+                    break
+        return {"from": frm, "subject": subject, "text": full.strip(), "refs": _in_reply_to(raw)}
+    finally:
+        try:
+            im.logout()
+        except Exception:
+            pass
+
+
 def check_inbox(db: W.DB, cfg, days: int = 30) -> dict:
     """Reads your inbox: sorts replies (interested / question / not now / no /
     unsubscribe), spots Calendly bookings and bounces."""
@@ -990,6 +1137,11 @@ def check_inbox(db: W.DB, cfg, days: int = 30) -> dict:
         raise RuntimeError("Add your email account in Settings first.")
     since = (dt.date.today() - dt.timedelta(days=days)).strftime("%d-%b-%Y")
     res = {"replied": 0, "unsubscribed": 0, "bounced": 0, "booked": 0}
+    if db.get_kv("replies_checked_v2", "") != "1":
+        n = clean_false_replies(db)
+        db.set_kv("replies_checked_v2", "1")
+        if n:
+            W.log(f"  Removed {n} wrong 'replied' mark(s) from emails that weren't from the lead.")
     contacted = db.q("SELECT domain, to_addr, status FROM outreach WHERE status IN"
                      " ('emailed','no_reply','replied','later','call_booked','proposal_sent')")
     if not contacted:
@@ -1011,15 +1163,24 @@ def check_inbox(db: W.DB, cfg, days: int = 30) -> dict:
                 if typ == "OK" and data and data[0]:
                     ids.update(data[0].split())
             # Replies from a different address (e.g. the owner's Gmail) still answer our email thread.
-            for (sent_id,) in db.q("SELECT msgid FROM messages WHERE domain=? AND msgid IS NOT NULL", (domain,)):
+            sent_ids = [m for (m,) in db.q("SELECT msgid FROM messages WHERE domain=? AND msgid IS NOT NULL",
+                                           (domain,))]
+            for sent_id in sent_ids:
                 typ, data = im.search(None, "SINCE", since, "HEADER", "In-Reply-To", sent_id)
                 if typ == "OK" and data and data[0]:
                     ids.update(data[0].split())
+            first = (get_outreach(db, domain) or {}).get("first_sent_at") or ""
             for mid in sorted(ids, key=int)[-3:]:
                 raw = _fetch(im, mid)
                 frm, subject, text = _message_text(raw)
                 if frm == (s.get("email") or "").lower():
                     continue            # our own sent copy
+                in_thread = any(x and x in _in_reply_to(raw) for x in sent_ids)
+                if not in_thread and not _sender_matches(frm, to_addr, site_dom):
+                    continue            # someone else whose address only looks similar
+                when = _msg_date(raw)
+                if first and when and when.isoformat() < first[:19]:
+                    continue            # older than our first email, so not a reply to it
                 if is_auto_reply(raw):
                     W.log(f"  Auto-reply from {domain} ignored (out of office / robot).")
                     continue

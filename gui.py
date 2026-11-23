@@ -606,7 +606,7 @@ class App:
         self.nav = {}
         items = [("dashboard", "⌂", "Dashboard"), ("find", "⌕", "Find leads"),
                  ("yp", "☰", "Yellow Pages"), ("leads", "★", "Leads"),
-                 ("outreach", "✉", "Outreach"), ("pipeline", "▤", "Pipeline"),
+                 ("outreach", "✉", "Outreach"), ("inbox", "⇩", "Inbox"), ("pipeline", "▤", "Pipeline"),
                  ("coverage", "▦", "Coverage"), ("settings", "⚙", "Settings")]
         tk.Frame(side, bg=BORDER, height=1).pack(fill="x", padx=18, pady=(0, 10))
         for key, icon, text in items:
@@ -655,7 +655,7 @@ class App:
         self.pages_host.pack(fill="both", expand=True, padx=22, pady=(16, 8))
         self.pages = {
             "dashboard": DashboardPage(self), "find": FindPage(self), "yp": YPPage(self),
-            "leads": LeadsPage(self), "outreach": OutreachPage(self),
+            "leads": LeadsPage(self), "outreach": OutreachPage(self), "inbox": InboxPage(self),
             "pipeline": PipelinePage(self), "coverage": CoveragePage(self),
             "settings": SettingsPage(self),
         }
@@ -2639,6 +2639,226 @@ class OutreachPage(Page):
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Inbox (your real info@ inbox, read inside the app)
+# ---------------------------------------------------------------------------
+class InboxPage(Page):
+    title = "Inbox"
+    subtitle = "Your email inbox. Emails from your leads are marked, so you see who really replied."
+
+    def build(self):
+        top = tk.Frame(self.body, bg=BG)
+        top.pack(fill="x", pady=(0, 10))
+        Btn(top, text="⟳  Refresh", style="Primary.TButton", command=self.load).pack(side="left")
+        self.show_var = tk.StringVar(value="leads")
+        for val, lab in (("leads", "From my leads"), ("all", "Everything"), ("other", "Not from leads")):
+            ttk.Radiobutton(top, text=lab, value=val, variable=self.show_var,
+                            command=self.fill).pack(side="left", padx=(14, 0))
+        self.status = tk.Label(top, bg=BG, fg=MUTED, font=F(9))
+        self.status.pack(side="right")
+        pw = ttk.Panedwindow(self.body, orient="horizontal")
+        pw.pack(fill="both", expand=True)
+        lc = card(pw, pad=0)
+        fr, self.tree = make_tree(lc.inner, [("when", "When", 95), ("from", "From", 230),
+                                             ("subject", "Subject", 300), ("lead", "Lead", 160)], height=20)
+        fr.pack(fill="both", expand=True)
+        self.tree.tag_configure("lead", background=LEVEL_TINT.get("super", CARD))
+        self.tree.tag_configure("unread", font=F(10, "bold"))
+        self.tree.bind("<<TreeviewSelect>>", self.on_select)
+        pw.add(lc, weight=3)
+        rc = card(pw)
+        pw.add(rc, weight=2)
+        self.h_from = tk.Label(rc.inner, bg=CARD, fg=TEXT, font=F(11, "bold"), anchor="w", justify="left",
+                               wraplength=420)
+        self.h_from.pack(anchor="w")
+        self.h_subj = tk.Label(rc.inner, bg=CARD, fg=MUTED, font=F(10), anchor="w", justify="left",
+                               wraplength=420)
+        self.h_subj.pack(anchor="w", pady=(2, 6))
+        self.h_lead = tk.Frame(rc.inner, bg=CARD)
+        self.h_lead.pack(anchor="w", fill="x")
+        self.text = tk.Text(rc.inner, wrap="word", font=F(10), bg=SOFT, fg=TEXT, relief="flat",
+                            padx=10, pady=8, height=16)
+        self.text.pack(fill="both", expand=True, pady=(8, 8))
+        self.acts = tk.Frame(rc.inner, bg=CARD)
+        self.acts.pack(fill="x")
+        self.items = []
+        self.cur = None
+
+    def refresh(self, **kw):
+        s = O.settings(self.app.cfg)
+        if not (s.get("imap_host") and S.get_secret(self.app.cfg, "smtp_password")):
+            self.status.config(text="")
+            self.text.delete("1.0", "end")
+            self.text.insert("1.0", "Connect your email first: Settings > Email account.\n\nThen your "
+                                    "info@nadevelopers.com inbox shows here, with emails from your leads marked.")
+            return
+        if not self.items:
+            self.load()
+
+    def load(self):
+        try:
+            O.clean_false_replies(self.db)
+        except Exception:
+            pass
+        self.status.config(text="Loading your inbox…")
+
+        def go():
+            return O.inbox_list(self.db, self.app.cfg, limit=120)
+
+        def done(items):
+            self.items = items or []
+            self.fill()
+        self.app.run_job("Loading inbox", go, after=done)
+
+    def fill(self):
+        self.tree.delete(*self.tree.get_children())
+        show = self.show_var.get()
+        names = {r["domain"]: (r["name"] or r["domain"]) for r in self.db.lead_records()}
+        n_leads = 0
+        for i, m in enumerate(self.items):
+            is_lead = bool(m["lead"]) and not m["auto"]
+            n_leads += is_lead
+            if (show == "leads" and not is_lead) or (show == "other" and is_lead):
+                continue
+            tags = (("lead",) if is_lead else ()) + (("unread",) if m["unread"] else ())
+            who = m["name"] if m["name"] == m["from"] else f"{m['name']} <{m['from']}>"
+            lead = names.get(m["lead"], m["lead"] or "") + (" (auto-reply)" if m["auto"] and m["lead"] else "")
+            self.tree.insert("", "end", iid=str(i), tags=tags, values=(m["date"], who, m["subject"], lead or "—"))
+        self.status.config(text=f"{len(self.items)} newest emails · {n_leads} from leads")
+        if show == "leads" and not n_leads and self.items:
+            self.text.delete("1.0", "end")
+            self.text.insert("1.0", "No emails from your leads yet.\n\nSwitch to 'Everything' to see your whole "
+                                    "inbox. If a lead wrote from an address the app didn't recognise, open "
+                                    "the email and click 'This is from a lead'.")
+
+    def on_select(self, e=None):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        m = self.items[int(sel[0])]
+        self.cur = dict(m)
+        self.h_from.config(text=f"{m['name']}  <{m['from']}>" if m["name"] != m["from"] else m["from"])
+        self.h_subj.config(text=f"{m['subject']}   ·   {m['date']}")
+        self.text.delete("1.0", "end")
+        self.text.insert("1.0", "Opening…")
+        self._lead_bar()
+
+        def go():
+            return O.inbox_read(self.app.cfg, m["uid"])
+
+        def done(full):
+            if full and self.cur and self.cur["uid"] == m["uid"]:
+                self.cur["text"] = full["text"]
+                self.text.delete("1.0", "end")
+                self.text.insert("1.0", full["text"] or "(empty)")
+        def worker():
+            try:
+                r = go()
+            except Exception as e:
+                r = {"text": f"Couldn't open this email: {e}"}
+            self.app.q.put(("call", lambda: done(r)))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _lead_bar(self):
+        for w in self.h_lead.winfo_children():
+            w.destroy()
+        for w in self.acts.winfo_children():
+            w.destroy()
+        m = self.cur
+        lead = next(iter(self.db.lead_records("s.domain=?", (m["lead"],))), None) if m.get("lead") else None
+        if lead:
+            st = (O.get_outreach(self.db, lead["domain"]) or {}).get("status", "new")
+            badge(self.h_lead, "LEAD", RED).pack(side="left")
+            tk.Label(self.h_lead, text=f"  {lead['name'] or lead['domain']}  ·  status: "
+                     f"{O.STATUS_LABELS.get(st, st)}", bg=CARD, fg=TEXT, font=F(9, "bold")).pack(side="left")
+            if m["auto"]:
+                tk.Label(self.h_lead, text="  (automatic reply, not counted)", bg=CARD, fg=MUTED,
+                         font=F(9)).pack(side="left")
+            Btn(self.acts, text="✦  Reply with Gemini", style="Primary.TButton",
+                command=lambda: self.reply(lead)).pack(side="left")
+            Btn(self.acts, text="Open lead", command=lambda: self.app.open_profile(lead["domain"])).pack(
+                side="left", padx=6)
+            Btn(self.acts, text="Not a reply", command=lambda: self.not_reply(lead)).pack(side="left")
+        else:
+            tk.Label(self.h_lead, text="Not from one of your leads", bg=CARD, fg=MUTED, font=F(9)).pack(side="left")
+            Btn(self.acts, text="This is from a lead…", style="Primary.TButton",
+                command=self.link_to_lead).pack(side="left")
+            Btn(self.acts, text="Reply in my email app",
+                command=lambda: open_url(f"mailto:{m['from']}?subject=Re: {m['subject']}")).pack(side="left", padx=6)
+
+    def reply(self, lead):
+        m = self.cur
+        text = m.get("text") or self.text.get("1.0", "end")
+        kind = "interested"
+
+        def go():
+            k = ai.classify(self.app.cfg, f"Subject: {m['subject']}\n{text}")
+            return k, ai.draft_reply(self.app.cfg, lead, text, k)
+
+        def done(res):
+            if not res:
+                return
+            k, body = res
+            subj = m["subject"] if m["subject"].lower().startswith("re:") else "Re: " + m["subject"]
+            mid = O.make_draft(self.db, self.app.cfg, lead, 0, to_addr=m["from"], subject=subj, body=body)
+            self.app.toast("Reply drafted. Check it in Outreach, then approve and send.")
+            self.app.show("outreach", view="draft", select=mid)
+        if ai.enabled(self.app.cfg):
+            self.app.run_job("Gemini reply", go, after=done)
+        else:
+            done((kind, ai.draft_reply(self.app.cfg, lead, text, kind)))
+
+    def not_reply(self, lead):
+        d = lead["domain"]
+        self.db.x("DELETE FROM replies WHERE domain=? AND from_addr=?", (d, self.cur["from"]))
+        st = (O.get_outreach(self.db, d) or {}).get("status")
+        if st in ("replied", "later", "lost") and not self.db.q("SELECT 1 FROM replies WHERE domain=?", (d,)):
+            O.set_status(self.db, d, "emailed")
+        self.cur["lead"] = None
+        for it in self.items:
+            if it["from"] == self.cur["from"]:
+                it["lead"] = None
+        self.app.toast("OK, not counted as a reply. Follow-ups continue.")
+        self.fill()
+        self._lead_bar()
+
+    def link_to_lead(self):
+        rows = self.db.q("SELECT o.domain, o.status FROM outreach o WHERE o.status NOT IN ('new','draft')")
+        names = {r["domain"]: (r["name"] or r["domain"]) for r in self.db.lead_records()}
+        opts = sorted(((names.get(d, d), d) for d, _ in rows), key=lambda x: x[0].lower())
+        if not opts:
+            return messagebox.showinfo("Inbox", "You haven't emailed any leads yet.")
+        win = tk.Toplevel(self.app.root)
+        win.title("Which lead is this from?")
+        win.configure(bg=CARD)
+        win.transient(self.app.root)
+        tk.Label(win, text=f"{self.cur['from']} wrote. Which lead is it?", bg=CARD, fg=TEXT,
+                 font=F(10, "bold")).pack(padx=16, pady=(14, 6), anchor="w")
+        var = tk.StringVar(value=opts[0][0])
+        cb = ttk.Combobox(win, textvariable=var, values=[o[0] for o in opts], width=44, state="readonly")
+        cb.pack(padx=16)
+
+        def ok():
+            dom = dict(opts).get(var.get())
+            win.destroy()
+            if not dom:
+                return
+            m = self.cur
+            text = m.get("text") or ""
+            kind = ai.classify(self.app.cfg, f"Subject: {m['subject']}\n{text}")
+            self.db.x("INSERT OR IGNORE INTO replies (domain, from_addr, subject, snippet, kind, received_at)"
+                      " VALUES (?,?,?,?,?,?)", (dom, m["from"], m["subject"], text[:3000], kind, W.now()))
+            O.set_status(self.db, dom, {"unsubscribe": "unsubscribed", "no": "lost", "later": "later"}.get(kind, "replied"))
+            for it in self.items:
+                if it["from"] == m["from"]:
+                    it["lead"] = dom
+            self.cur["lead"] = dom
+            self.app.toast(f"Linked to {var.get()}: {ai.REPLY_KINDS.get(kind, kind)}")
+            self.fill()
+            self._lead_bar()
+        Btn(win, text="Link", style="Primary.TButton", command=ok).pack(padx=16, pady=14, anchor="e")
+
+
 class PipelinePage(Page):
     title = "Pipeline"
     subtitle = "Everyone you've contacted, from first email to won."
