@@ -38,9 +38,9 @@ DEFAULT_WORK = [
 BADGES = ASSET + "badges/"  # real PNG copies (the site serves WebP, which many inboxes hide)
 DEFAULT_BRAND = {
     "legend_badge": BADGES + "wix.png",
-    "partner_logos": [[BADGES + "wix.png", "Wix Legend Partner", 40], [BADGES + "google.png", "Google Partner", 34],
-                      [BADGES + "shopify.png", "Shopify", 24], [BADGES + "wordpress.png", "WordPress", 22],
-                      [BADGES + "designrush.png", "DesignRush", 20]],
+    "partner_logos": [[BADGES + "wix.png", "Wix Legend Partner", 46], [BADGES + "google.png", "Google Partner", 40],
+                      [BADGES + "wordpress.png", "WordPress", 24], [BADGES + "shopify.png", "Shopify", 26],
+                      [BADGES + "woo.png", "WooCommerce", 22], [BADGES + "designrush.png", "DesignRush", 20]],
     "socials": [["Facebook", "https://www.facebook.com/nadevelopersagency", "f", "#1877F2"],
                 ["Instagram", "https://www.instagram.com/nadevelopers/", "ig", "#E4405F"],
                 ["LinkedIn", "https://www.linkedin.com/company/nadevelopers/", "in", "#0A66C2"],
@@ -156,16 +156,16 @@ def _b(s: dict, key: str):
     return DEFAULT_BRAND[key] if v in (None, "", []) else v
 
 
-def _socials(s: dict, size: int = 26, wa_link: str = "") -> str:
+def _socials(s: dict, size: int = 28, wa_link: str = "") -> str:
     cells = ""
     items = list(_b(s, "socials")) + ([["WhatsApp", wa_link, "wa", "#25D366"]] if wa_link else [])
     for name, url, label, col in items:
         if not url:
             continue
+        icon = ASSET + "social/" + name.lower() + ".png"
         cells += (f'<td style="padding-right:6px"><a href="{html.escape(url)}" title="{html.escape(name)}" '
-                  f'style="display:inline-block;width:{size}px;height:{size}px;line-height:{size}px;border-radius:{size // 2}px;'
-                  f'background:{col};color:#ffffff;text-align:center;font-size:12px;font-weight:700;'
-                  f'text-decoration:none;{FONT}">{html.escape(label)}</a></td>')
+                  f'style="text-decoration:none"><img src="{icon}" width="{size}" height="{size}" '
+                  f'alt="{html.escape(name)}" style="display:block;border:0;width:{size}px;height:{size}px"></a></td>')
     return f'<table role="presentation" cellpadding="0" cellspacing="0"><tr>{cells}</tr></table>' if cells else ""
 
 
@@ -212,16 +212,16 @@ def _signature(sig_lines: list[str], s: dict) -> str:
 
 def _partners(s: dict) -> str:
     cells = "".join(
-        f'<td style="padding:0 10px;vertical-align:middle"><img src="{html.escape(u)}" height="{h}" alt="{html.escape(alt)}" '
+        f'<td style="padding:0 7px;vertical-align:middle"><img src="{html.escape(u)}" height="{h}" alt="{html.escape(alt)}" '
         f'style="display:block;border:0;height:{h}px;width:auto"></td>'
         for u, alt, h in _b(s, "partner_logos") if u)
     if not cells:
         return ""
     return (f'<tr><td style="padding:16px 30px 6px 30px;border-top:1px solid {P["line"]}" align="center">'
             f'<div style="font-size:11px;letter-spacing:.8px;color:{P["muted"]};font-weight:700;margin-bottom:10px">'
-            f'TRUSTED PARTNER &nbsp;·&nbsp; PLATFORMS WE BUILD ON</div>'
+            f'PARTNERS AND PLATFORMS WE WORK WITH</div>'
             f'<table role="presentation" cellpadding="0" cellspacing="0" align="center" '
-            f'style="background:#FFFFFF;border-radius:8px;padding:8px 6px"><tr>{cells}</tr></table>'
+            f'style="background:#FFFFFF;border:1px solid #E3E8EF;border-radius:8px;padding:12px 4px"><tr>{cells}</tr></table>'
             f'</td></tr>')
 
 

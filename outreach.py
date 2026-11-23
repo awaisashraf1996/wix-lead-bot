@@ -706,6 +706,28 @@ def preview_file(cfg, msg: dict, db=None) -> str:
     return path
 
 
+def send_samples(cfg, db) -> str:
+    """Send the real first email and a real follow-up to your own inbox, through
+    your own email account, so you see exactly what a business owner sees."""
+    s = settings(cfg)
+    lead = next(iter(db.lead_records()), None) or {
+        "domain": "brightsmileaustin.com", "name": "Bright Smile Dental", "final_url": "https://brightsmileaustin.com",
+        "category": "dentist", "city": "Austin", "region_name": "Texas", "title": "Home | My Site",
+        "issues": "Generic or missing page title (weak SEO); Copyright year 2019 (site not updated); "
+                  "No online booking button found"}
+    srv = _smtp(cfg)
+    try:
+        for step in (1, 3):
+            subj, body = templates(cfg)[step]
+            msg = {"to_addr": s["email"], "step": step, "domain": lead["domain"],
+                   "subject": "[SAMPLE] " + _fill(subj, lead, s),
+                   "body": _fill(body, lead, s) + _fill(FOOTER, lead, s)}
+            srv.send_message(build_message(cfg, msg, None, design_extras(db, lead["domain"])))
+    finally:
+        srv.quit()
+    return f"Two sample emails were sent to {s['email']}."
+
+
 def test_connection(cfg, send_to_self: bool = True) -> str:
     srv = _smtp(cfg)
     try:

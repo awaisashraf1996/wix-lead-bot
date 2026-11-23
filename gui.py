@@ -816,6 +816,8 @@ class App:
                     self.pages["yp"].on_captured(*item[1:])
                 elif kind == "update":
                     self.on_update(item[1], item[2])
+                elif kind == "toast":
+                    self.toast(*item[1:])
                 elif kind == "image":
                     self.pages["leads"].profile.set_image(*item[1:])
         except queue.Empty:
@@ -2611,6 +2613,7 @@ class SettingsPage(Page):
         Btn(bb, text="Save", style="Primary.TButton", command=self.save_design).pack(side="left")
         Btn(bb, text="👁  Preview first email", command=lambda: self.preview_design(1)).pack(side="left", padx=8)
         Btn(bb, text="👁  Preview a follow-up", command=lambda: self.preview_design(3)).pack(side="left")
+        Btn(bb, text="✉  Send me real samples", command=self.send_samples).pack(side="left", padx=8)
 
         # --- templates
         t3 = tk.Frame(nb, bg=CARD)
@@ -2821,6 +2824,16 @@ class SettingsPage(Page):
         self.app.cfg.save()
         if not quiet:
             self.app.toast("Saved")
+
+    def send_samples(self):
+        self.save_design(quiet=True)
+
+        def work():
+            try:
+                self.app.q.put(("toast", O.send_samples(self.app.cfg, self.db)))
+            except Exception as e:
+                self.app.q.put(("toast", f"Couldn't send: {e}. Check Settings > Email account.", RED))
+        threading.Thread(target=work, daemon=True).start()
 
     def preview_design(self, step=3):
         self.save_design(quiet=True)
