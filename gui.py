@@ -700,9 +700,8 @@ class App:
 
     # ---------------- job bar (progress + pause/resume/stop) ----------------
     def build_jobbar(self, parent):
-        bar = self.jobbar = tk.Frame(parent, bg=NAVY, height=92)
+        bar = self.jobbar = tk.Frame(parent, bg=NAVY)
         bar.pack(side="bottom", fill="x")
-        bar.pack_propagate(False)
         left = tk.Frame(bar, bg=NAVY)
         left.pack(side="left", fill="both", expand=True, padx=18, pady=10)
         self.job_title = tk.Label(left, text="Ready", bg=NAVY, fg="white", font=F(10, "bold"),
@@ -717,6 +716,9 @@ class App:
         self.job_detail = tk.Label(left, text="Pick what to search on the Find leads page.",
                                    bg=NAVY, fg="#AFC0CF", font=F(9), anchor="w")
         self.job_detail.pack(fill="x", pady=(4, 0))
+        self.job_side = tk.Label(left, text="", bg=NAVY, fg="#7FD3E6", font=F(9), anchor="w")
+        self.job_side.pack(fill="x")
+        self.side_jobs = []
         btns = tk.Frame(bar, bg=NAVY)
         btns.pack(side="right", padx=18)
         self.btn_pause = Btn(btns, text="⏸  Pause", style="Warn.TButton",
@@ -727,10 +729,15 @@ class App:
         self.btn_stop.pack(side="left", padx=4)
         self.prog = {}
 
+    SEARCH_JOBS = ("Finding leads", "wixsite.com hunt", "Checking your list", "Checking Yellow Pages websites")
+
     def run_job(self, kind: str, fn, after=None):
         if self.job and self.job.is_alive():
-            messagebox.showinfo("Busy", "Another job is running. Stop it first or wait.")
-            return False
+            if kind in self.SEARCH_JOBS and self.job_kind in self.SEARCH_JOBS:
+                messagebox.showinfo("Busy", "A search is already running. You can keep using the rest of the "
+                                    "app; start the next search when this one finishes.")
+                return False
+            return self.run_side(kind, fn, after)
         W.STOP.clear()
         W.PAUSE.clear()
         self.job_kind = kind
@@ -752,6 +759,42 @@ class App:
         self.job = threading.Thread(target=target, daemon=True)
         self.job.start()
         return True
+
+    def run_side(self, kind: str, fn, after=None):
+        """Run a task next to the search: the search keeps going, the app stays usable."""
+        self.side_jobs.append(kind)
+        self._side_label()
+
+        def target():
+            W.SIDE.on = True
+            try:
+                res, err = fn(), None
+            except Exception as e:
+                res, err = None, e
+            self.q.put(("side_done", kind, res, err, after))
+        threading.Thread(target=target, daemon=True).start()
+        self.toast(f"{kind} started. The search keeps running.")
+        return True
+
+    def _side_label(self):
+        self.job_side.config(text=("Also running: " + ", ".join(self.side_jobs)) if self.side_jobs else "")
+
+    def side_finished(self, kind, res, err, after):
+        if kind in self.side_jobs:
+            self.side_jobs.remove(kind)
+        self._side_label()
+        if err:
+            self.log(f"\nPROBLEM ({kind}): {err}")
+            messagebox.showerror(kind, str(err))
+        else:
+            self.toast(f"{kind} finished", GREEN)
+            if after:
+                try:
+                    after(res)
+                except Exception:
+                    pass
+        if self.current != "find":
+            self.refresh_page()
 
     def toggle_pause(self):
         if W.PAUSE.is_set():
@@ -862,6 +905,8 @@ class App:
                     self.on_progress(item[1])
                 elif kind == "done":
                     self.job_finished(*item[1:])
+                elif kind == "side_done":
+                    self.side_finished(*item[1:])
                 elif kind == "captured":
                     self.pages["yp"].on_captured(*item[1:])
                 elif kind == "update":
@@ -1851,6 +1896,7 @@ class Profile:
         menu.add_command(label="Do not contact", command=lambda: self.set_status("do_not_contact"))
         menu.add_command(label="This is my client (never contact)", command=self.mark_client)
         menu.add_command(label="Copy email address", command=self.copy_email)
+        menu.add_command(label="Send this email to me (see it as the client)", command=self.send_to_me)
         menu.add_command(label="Copy short audit text", command=self.copy_audit)
         mb["menu"] = menu
         mb.pack(side="left", padx=6)
@@ -2057,6 +2103,19 @@ class Profile:
         key = S.get_secret(self.app.cfg, "psi_key")
         self.app.run_job("Auditing website", lambda: A.run(self.db, lead, key, O.settings(self.app.cfg)),
                          after=lambda res: self._reshow(lead["domain"]))
+
+    def send_to_me(self):
+        from tkinter import simpledialog
+        lead = self.lead
+        last = self.db.get_kv("test_to", "") or O.settings(self.app.cfg).get("email", "")
+        to = simpledialog.askstring("Send to me", f"Send {lead.get('name') or lead['domain']}'s first email, "
+                                    "exactly as they would get it, to which address?", initialvalue=last,
+                                    parent=self.app.root)
+        if not to or "@" not in to:
+            return
+        self.db.set_kv("test_to", to.strip())
+        self.app.run_job("Test email to me", lambda: O.send_as_client(self.db, self.app.cfg, lead, to.strip()),
+                         after=lambda res: res and messagebox.showinfo("Sent", res))
 
     def _check_marketing(self, domain, url):
         """Older leads were checked before ads/pixel detection existed: look once."""

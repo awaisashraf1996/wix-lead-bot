@@ -67,7 +67,7 @@ if getattr(sys, "frozen", False):          # running as WixLeadBot.exe
 else:
     HERE = os.path.dirname(os.path.abspath(__file__))
     BUNDLED = HERE
-VERSION = "1.7.2"
+VERSION = "1.7.3"
 # GitHub "owner/repo" whose Releases hold new versions of WixLeadBot.exe
 UPDATE_REPO = "awaisashraf1996/wix-lead-bot"
 
@@ -78,13 +78,26 @@ STOP = threading.Event()
 PAUSE = threading.Event()     # set = paused
 
 
+# Side tasks (run while a search is going) must not move the main progress bar
+# or be held by its Pause button.
+SIDE = threading.local()
+
+
 def wait_if_paused() -> None:
     """Workers call this between steps; it blocks while Pause is on."""
+    if getattr(SIDE, "on", False):
+        return
     while PAUSE.is_set() and not STOP.is_set():
         time.sleep(0.3)
 
 
+def stopping() -> bool:
+    return STOP.is_set() and not getattr(SIDE, "on", False)
+
+
 def progress(**kw) -> None:
+    if getattr(SIDE, "on", False):
+        return
     if PROGRESS_HOOK:
         try:
             PROGRESS_HOOK(kw)

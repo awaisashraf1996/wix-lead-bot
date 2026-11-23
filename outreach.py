@@ -749,6 +749,38 @@ def send_samples(cfg, db) -> str:
     return f"Two sample emails were sent to {s['email']}."
 
 
+def send_as_client(db: W.DB, cfg, lead: dict, to_addr: str) -> str:
+    """Send this lead's real first email to YOU, exactly as the business would get it
+    (same subject, review-page link, design). Nothing is recorded as sent to the lead."""
+    s = settings(cfg)
+    row = db.q("SELECT id, subject, body FROM messages WHERE domain=? AND step=1 AND status IN ('draft','approved')"
+               " ORDER BY id DESC LIMIT 1", (lead["domain"],))
+    if row:
+        mid, subject, body = row[0]
+        msg = {"id": mid, "domain": lead["domain"], "step": 1, "subject": subject, "body": body}
+        msg = _with_audit_page(db, cfg, msg)
+    else:
+        subj, tb = templates(cfg)[1]
+        body = _fill(tb, lead, s) + _fill(FOOTER, lead, s)
+        try:
+            import website as WS
+            if WS.enabled(cfg) and WS.settings(cfg)["audit_pages"]:
+                url = WS.audit_url(db, lead["domain"]) or WS.publish_audit(db, cfg, lead)
+                if url:
+                    parts = body.split("\n\n")
+                    body = "\n\n".join(parts[:3] + [WS.AUDIT_LINE.format(url=url)] + parts[3:])
+        except Exception as e:
+            W.log(f"  Review page skipped: {e}")
+        msg = {"domain": lead["domain"], "step": 1, "subject": _fill(subj, lead, s), "body": body}
+    msg["to_addr"] = to_addr
+    srv = _smtp(cfg)
+    try:
+        srv.send_message(build_message(cfg, msg, None, design_extras(db, lead["domain"])))
+    finally:
+        srv.quit()
+    return f"Sent {lead.get('name') or lead['domain']}'s first email to {to_addr}: \"{msg['subject']}\""
+
+
 def test_connection(cfg, send_to_self: bool = True) -> str:
     srv = _smtp(cfg)
     try:
