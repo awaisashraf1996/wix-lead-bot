@@ -58,44 +58,92 @@ def ask(cfg, prompt: str, want_json: bool = True, temperature: float = 0.6) -> d
     if want_json:
         body["generationConfig"]["responseMimeType"] = "application/json"
     model = (cfg.get("ai", {}) or {}).get("model") or ""
+    names = list(dict.fromkeys(([model] if model else []) + MODELS))
     last = ""
-    for m in ([model] if model else []) + MODELS:
-        for attempt in range(3):
-            _last_call[0] = time.time()
+    for base in _endpoints(key):
+        tried = list(names)
+        found = _discover(base, key)          # models this key can really use
+        tried += [m for m in found if m not in tried]
+        for m in tried:
+            res, last, gone = _try(base, m, key, body, want_json, last)
+            if res is not None:
+                if (cfg.get("ai", {}) or {}).get("model") != m or (cfg.get("ai", {}) or {}).get("base") != base:
+                    cfg.set("ai", {"model": m, "base": base})   # remember what works
+                    try:
+                        cfg.save()
+                    except Exception:
+                        pass
+                return res
+            if not gone:
+                break                          # a real error, not a missing model
+    raise RuntimeError(f"Gemini didn't answer ({last}). Check the key at aistudio.google.com/apikey.")
+
+
+GL = "https://generativelanguage.googleapis.com/v1beta"
+VERTEX = "https://aiplatform.googleapis.com/v1/publishers/google"   # Google Cloud "express" keys
+
+
+def _endpoints(key: str) -> list[str]:
+    # AI Studio keys start with AIza; Google Cloud keys (AQ.) may only work on Vertex.
+    return [GL, VERTEX] if key.startswith("AIza") else [VERTEX, GL] if key.startswith("AQ.") else [GL, VERTEX]
+
+
+def _discover(base: str, key: str) -> list[str]:
+    if base != GL:
+        return ["gemini-2.5-flash", "gemini-2.0-flash-001", "gemini-2.5-flash-lite"]
+    try:
+        r = requests.get(GL + "/models", params={"key": key, "pageSize": 200}, timeout=20)
+        if r.status_code != 200:
+            return []
+        out = [m["name"].split("/", 1)[1] for m in r.json().get("models", [])
+               if "generateContent" in m.get("supportedGenerationMethods", [])
+               and "flash" in m["name"] and "image" not in m["name"] and "tts" not in m["name"]]
+        return sorted(out, key=lambda n: ("lite" in n, "preview" in n or "exp" in n, n), reverse=False)
+    except (requests.RequestException, ValueError, KeyError):
+        return []
+
+
+def _try(base, m, key, body, want_json, last):
+    """Returns (answer or None, last error, model_missing)."""
+    url = f"{base}/models/{m}:generateContent"
+    for attempt in range(3):
+        _last_call[0] = time.time()
+        try:
+            r = requests.post(url, params={"key": key}, json=body, timeout=90)
+        except requests.RequestException as e:
+            last = str(e)
+            time.sleep(5)
+            continue
+        if r.status_code == 200:
             try:
-                r = requests.post(API.format(model=m), params={"key": key}, json=body, timeout=90)
-            except requests.RequestException as e:
-                last = str(e)
-                time.sleep(5)
+                text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            except (KeyError, IndexError, ValueError):
+                return None, "empty answer", True
+            if not want_json:
+                return text.strip(), last, False
+            try:
+                return json.loads(re.sub(r"^```(?:json)?|```$", "", text.strip()).strip()), last, False
+            except ValueError:
+                last = "answer wasn't valid JSON"
                 continue
-            if r.status_code == 200:
-                try:
-                    text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-                except (KeyError, IndexError, ValueError):
-                    last = "empty answer"
-                    break
-                if not want_json:
-                    return text.strip()
-                try:
-                    return json.loads(re.sub(r"^```(?:json)?|```$", "", text.strip()).strip())
-                except ValueError:
-                    last = "answer wasn't valid JSON"
-                    continue
-            if r.status_code == 404:
-                last = f"model {m} not available"
-                break                      # try the next model name
-            if r.status_code in (429, 503):
-                last = "Gemini is busy or the free limit was reached"
-                time.sleep(20 * (attempt + 1))
-                continue
-            if r.status_code in (400, 401, 403):
-                try:
-                    msg = r.json().get("error", {}).get("message", "")
-                except ValueError:
-                    msg = r.text[:200]
-                raise RuntimeError(f"Gemini refused the request: {msg}")
-            last = f"HTTP {r.status_code}"
-    raise RuntimeError(f"Gemini didn't answer ({last}).")
+        try:
+            msg = r.json().get("error", {}).get("message", "")
+        except ValueError:
+            msg = r.text[:200]
+        if r.status_code == 404:
+            return None, f"model {m} not available", True
+        if r.status_code in (429, 503):
+            last = "Gemini is busy or the free limit was reached"
+            time.sleep(20 * (attempt + 1))
+            continue
+        if r.status_code in (400, 401, 403):
+            # Wrong address for this kind of key: let the caller try the other one.
+            if any(w in msg.lower() for w in ("api key", "permission", "not enabled", "unauthenticated",
+                                               "credentials", "disabled")):
+                return None, f"Gemini refused the key: {msg}", True
+            raise RuntimeError(f"Gemini refused the request: {msg}")
+        last = f"HTTP {r.status_code} {msg[:120]}"
+    return None, last, True
 
 
 # ---------------------------------------------------------------------------
