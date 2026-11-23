@@ -128,6 +128,8 @@ def make_plan(db: W.DB, cfg, lead: dict, audit_data: dict | None = None) -> dict
     prompt = f"""You help {s['sender_name']} from {s['company']}, a Wix Legend Partner web design studio,
 win local businesses in the USA and Canada as website redesign clients. He only takes meetings
 booked through {s['calendly']}. Prices: 3-5 pages $350, 5-10 pages $600, online store +30%.
+Proof you may use (true): Wix Legend Partner, about 2,000 websites built over 8 years, 24/7 support,
+fixed written quote before work starts, free support after launch. Portfolio: {s.get('portfolio_url', '')}
 
 Business facts:
 {_lead_facts(lead, audit_data)}
@@ -138,11 +140,12 @@ Write JSON with these keys:
 "talking_points": 3-5 short bullet strings for the sales call,
 "objections": 2-3 likely objections with a one-line answer each, as strings,
 "followup_ideas": 3 strings, one fresh idea for each follow-up email (day 3, 7, 14),
-"subject": a cold email subject line, under 7 words, no clickbait, no emojis,
+"subject": a cold email subject line, under 7 words, specific to them (e.g. "<Business>: 3 quick website fixes"), no clickbait, no emojis, no ALL CAPS,
 "email": the cold email body. Rules: 70-120 words, plain text, friendly and specific to this
-business, mention 2-3 real problems from the facts in plain English (no jargon like "meta" or
-"LCP"), no prices, no attachments mentioned, one clear call to action: a free 15-minute call at
-{s['calendly']} or reply to this email. Start with "Hi {{greeting}}," and end with:
+business, mention 2-3 real problems from the facts in plain English as short bullet lines starting
+with "• " (no jargon like "meta" or "LCP"), one sentence of proof, no prices, no attachments
+mentioned, one clear call to action: a free 15-minute call at {s['calendly']} or reply "yes" for a
+short written plan. Sound like a helpful person, not a marketer. Start with "Hi {{greeting}}," and end with:
 {s['sender_name']}
 {s['company']} · Wix Legend Partner
 {s['website']}

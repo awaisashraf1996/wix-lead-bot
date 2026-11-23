@@ -64,6 +64,10 @@ DEFAULTS = {
     "delay_min": 60, "delay_max": 150,
     "business_hours_only": True,
     "followup_days": [3, 7, 14],
+    "proof_line": "Wix Legend Partner · About 2,000 projects in 8 years · 24/7 support · Fixed written quote",
+    "portfolio_url": "https://nadevelopers.com/portfolio",
+    "offer": "Black Friday: free logo design with every new website order until December 1.",
+    "offer_until": "2026-12-01",
 }
 
 # Categories where an online booking button really matters
@@ -74,40 +78,58 @@ BOOKING_CATEGORIES = {
 }
 
 TEMPLATES = {
-    1: ("Quick idea for {business}'s website",
+    1: ("{business}: 3 quick website fixes",
         "Hi {greeting},\n\n"
-        "I was looking at {site} and noticed a few quick wins that could bring you "
-        "more calls and bookings:\n\n"
+        "I took a quick look at {site} and found a few things that are probably costing you "
+        "customers:\n\n"
         "{issues_bullets}\n\n"
-        "We're {company}, a Wix Legend Partner studio. We fix and redesign Wix "
-        "sites for local businesses like yours.\n\n"
-        "Want me to send you a free one-page plan for your site? Or grab 15 minutes "
-        "here: {calendly}\n\n"
+        "I'm {sender_name} from {company}. We're a Wix Legend Partner and have built about 2,000 "
+        "websites over 8 years, many for {category_plural} like you.\n\n"
+        "Would a free 15-minute call to walk you through the fixes be useful? My calendar: {calendly}\n\n"
+        "Or just reply \"yes\" and I'll send a short written plan instead.\n\n"
         "{sender_name}\n{company} · Wix Legend Partner\n{website}"),
-    2: ("Re: Quick idea for {business}'s website",
+    2: ("Re: {business}: 3 quick website fixes",
         "Hi {greeting},\n\n"
-        "Just bumping this up. Happy to put together that free plan for {site}. "
-        "It takes me about 10 minutes and there are no strings attached.\n\n"
-        "Should I send it over?\n\n{sender_name}"),
-    3: ("Re: Quick idea for {business}'s website",
+        "Just bringing this back to the top of your inbox. The fixes I mentioned for {site} are "
+        "quick wins, and most of them we can do without changing how you run the site day to day.\n\n"
+        "You'd get a fixed written quote before any work starts, so there are no surprises.\n\n"
+        "Worth a quick look together?\n\n"
+        "{sender_name}\n{company}"),
+    3: ("One quick tip for {business}",
         "Hi {greeting},\n\n"
-        "One quick tip you can use even if we never work together:\n\n"
+        "Here's one thing you can fix today, even if we never work together:\n\n"
         "{quick_win}\n\n"
-        "If you'd like us to handle this (and the rest), you can book a short call "
-        "here: {calendly}\n\n{sender_name}"),
-    4: ("Re: Quick idea for {business}'s website",
+        "If you'd like to see what we do for {category_plural}, here's some recent work: {portfolio}\n\n"
+        "{offer}"
+        "{sender_name}\n{company}"),
+    4: ("Should I close your file?",
         "Hi {greeting},\n\n"
-        "I don't want to fill your inbox, so this is my last note. If improving "
-        "{site} becomes a priority, just reply to this email and I'll pick it up "
-        "from there.\n\n"
-        "Wishing you a great season,\n{sender_name}\n{company}"),
+        "I haven't heard back, so I'll assume the timing isn't right and won't keep emailing.\n\n"
+        "If improving {site} becomes a priority later, just reply to this email and I'll pick it "
+        "up from there.\n\n"
+        "{offer}"
+        "All the best,\n{sender_name}\n{company}"),
     5: ("Checking back about {business}'s website",
         "Hi {greeting},\n\n"
-        "A while ago you mentioned the timing wasn't right, so I'm checking back as promised. "
-        "If updating {site} is on your list now, I'd be happy to show you what I'd change in a "
-        "free 15-minute call: {calendly}\n\n"
+        "A while ago you mentioned the timing wasn't right, so I'm checking back as promised.\n\n"
+        "If updating {site} is on your list now, I'd be happy to show you what I'd change. "
+        "It's a free 15-minute call and you'll get a fixed written quote afterwards.\n\n"
+        "{offer}"
         "{sender_name}\n{company}"),
 }
+
+# Proof from nadevelopers.com (edit in Settings > Your details)
+DEFAULT_TESTIMONIALS = [
+    ["He went above and beyond! His patience with my small details was exceptional!", "Erica F., website client"],
+    ["Fantastic service, website looks great, very fast. I'm definitely going to use him again.", "Voiyce, website client"],
+    ["Prompt, patient and did an excellent job on my website redesign.", "Renea, redesign client"],
+    ["He took all of my requests, answered all of my questions, and really delivered a solid product.", "Fallacious Nature, website client"],
+]
+# Emails that get the branded design (0 = your answers to replies). The first
+# email stays plain because it looks personal and lands in the inbox more often.
+BRANDED_STEPS = [0, 2, 3, 4, 5]
+DEFAULTS["testimonials"] = DEFAULT_TESTIMONIALS
+DEFAULTS["branded_steps"] = BRANDED_STEPS
 
 FOOTER = ("\n\n--\n{company} · {postal_address}\n"
           "If you'd rather not hear from us, just reply \"unsubscribe\" and we won't "
@@ -246,12 +268,32 @@ def best_email(lead: dict) -> str:
     return pref[0] if pref else ""
 
 
+def testimonial_for(domain: str, s: dict) -> tuple[str, str] | None:
+    items = [t for t in (s.get("testimonials") or []) if t and t[0]]
+    if not items:
+        return None
+    return tuple(items[sum(map(ord, domain or "x")) % len(items)])
+
+
 def _fill(text: str, lead: dict, s: dict) -> str:
     pts = _issue_points(lead)
     name = (lead.get("name") or lead.get("site_name") or "").strip()
     site = (lead.get("final_url") or lead.get("website") or lead.get("domain") or "")
     site = re.sub(r"^https?://(www\.)?", "", site).rstrip("/")
+    cat = W.load_categories().get(lead.get("category") or "", {})
+    plural = (cat.get("short") or (lead.get("category") or "local businesses").replace("_", " "))
+    plural = plural.split(" & ")[0].split(",")[0].lower()
+    offer = (s.get("offer") or "").strip()
+    if offer and s.get("offer_until"):
+        try:
+            if dt.date.today() > dt.date.fromisoformat(s["offer_until"]):
+                offer = ""
+        except ValueError:
+            pass
     values = {
+        "category_plural": plural, "portfolio": s.get("portfolio_url", ""),
+        "offer": (offer + "\n\n") if offer else "",
+        "testimonial": (testimonial_for(lead.get("domain", ""), s) or ("", ""))[0],
         "business": name or site, "greeting": f"{name} team" if name else "there",
         "site": site, "city": lead.get("city") or "",
         "issues_bullets": "\n".join(f"• {p}" for p, _ in pts[:3]),
@@ -597,6 +639,10 @@ def build_message(cfg, msg: dict, thread_msgid: str | None) -> EmailMessage:
         m["In-Reply-To"] = thread_msgid
         m["References"] = thread_msgid
     m.set_content(msg["body"])
+    if msg.get("step") in (s.get("branded_steps") or []):
+        import email_design
+        m.add_alternative(email_design.to_html(msg["body"], s, testimonial_for(msg.get("domain", ""), s)),
+                          subtype="html")
     import json as _json
     import mimetypes
     import os
@@ -610,13 +656,42 @@ def build_message(cfg, msg: dict, thread_msgid: str | None) -> EmailMessage:
     return m
 
 
+def preview_file(cfg, msg: dict) -> str:
+    """Write an HTML preview of how the email will look and return its path."""
+    import email_design
+    import html as _h
+    import os
+    s = settings(cfg)
+    head = (f"<div style='font:13px Segoe UI,Arial;max-width:600px;margin:16px auto;color:#16212D'>"
+            f"<b>To:</b> {_h.escape(msg.get('to_addr', ''))}<br><b>Subject:</b> {_h.escape(msg.get('subject', ''))}"
+            f"</div>")
+    if msg.get("step") in (s.get("branded_steps") or []):
+        page = email_design.to_html(msg["body"], s, testimonial_for(msg.get("domain", ""), s))
+        page = page.replace('<body style="margin:0;padding:0;background:#F3F5F8">',
+                            '<body style="margin:0;padding:0;background:#F3F5F8">' + head, 1)
+    else:
+        page = ("<html><head><meta charset='utf-8'></head><body style='background:#F3F5F8;padding:8px'>" + head +
+                "<div style='max-width:600px;margin:auto;background:#fff;padding:24px 28px;border-radius:10px;"
+                "font:15px/1.6 Segoe UI,Arial;color:#16212D'><div style='color:#6B7785;font-size:12px;"
+                "margin-bottom:10px'>Plain email: looks personal, best for the first contact</div>" +
+                _h.escape(msg["body"]).replace("\n", "<br>") + "</div></body></html>")
+    path = os.path.join(W.HERE, "output", "email-preview.html")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(page)
+    return path
+
+
 def test_connection(cfg, send_to_self: bool = True) -> str:
     srv = _smtp(cfg)
     try:
         if send_to_self:
             s = settings(cfg)
             m = build_message(cfg, {"to_addr": s["email"], "subject": "Wix Lead Bot test email",
-                                    "body": "Your email settings work. You can start sending."}, None)
+                                    "step": 2, "domain": "test",
+                                    "body": "Hi Awais,\n\nYour email settings work. This is how your branded "
+                                            "follow-ups look.\n\n• Example point one\n• Example point two\n\n"
+                                            f"{s['sender_name']}\n{s['company']}" + _fill(FOOTER, {}, s)}, None)
             srv.send_message(m)
     finally:
         srv.quit()

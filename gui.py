@@ -5,6 +5,7 @@ Build the .exe with BUILD_EXE.bat. Run from source with:  python gui.py
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import os
 import queue
 import re
@@ -31,10 +32,39 @@ OUT_DIR = os.path.join(W.HERE, "output")
 
 NAVY, TEAL, RED = "#16212D", "#1E91A8", "#E8222B"
 TEAL_DARK, RED_DARK = "#167487", "#C41A22"
-BG, CARD, BORDER, MUTED, TEXT = "#F3F5F8", "#FFFFFF", "#E2E7EE", "#6B7785", "#16212D"
 GREEN, AMBER = "#1F9D55", "#F08C2E"
 LEVEL_COLOR = {k: v[1] for k, v in W.LEVELS.items()}
-LEVEL_TINT = {"super": "#FDE7E8", "hot": "#FEF0E2", "normal": "#FFFFFF"}
+THEMES = {
+    "light": dict(BG="#F4F6F9", CARD="#FFFFFF", BORDER="#E3E8EF", MUTED="#6B7785", TEXT="#16212D",
+                  SOFT="#F8FAFC", HOVER="#EEF6F8", ACTIVE="#E3F2F5", INFO="#F3FAFB", INFO_BORDER="#D5EBF0",
+                  WARN_BG="#FDE7E8", TROUGH="#E9EEF3", TREE_HEAD="#F1F4F8", SEL="#CDEBF1", BTN="#EDF1F5",
+                  BTN_HOVER="#E0E6ED", ACCENT_TXT=TEAL_DARK,
+                  TINT={"super": "#FDECEC", "hot": "#FEF3E7", "normal": "#FFFFFF"}),
+    "dark": dict(BG="#0E151D", CARD="#17212B", BORDER="#26323F", MUTED="#93A1B0", TEXT="#E6EDF3",
+                 SOFT="#1C2733", HOVER="#1E2C38", ACTIVE="#123744", INFO="#152A33", INFO_BORDER="#1F4553",
+                 WARN_BG="#3A1E22", TROUGH="#26323F", TREE_HEAD="#1C2733", SEL="#16495A", BTN="#24313E",
+                 BTN_HOVER="#2E3D4C", ACCENT_TXT="#7FD3E6",
+                 TINT={"super": "#3A1E23", "hot": "#382A1C", "normal": "#17212B"}),
+}
+THEME = "light"
+BG = CARD = BORDER = MUTED = TEXT = SOFT = HOVER = ACTIVE = INFO = INFO_BORDER = ""
+WARN_BG = TROUGH = TREE_HEAD = SEL = BTN = BTN_HOVER = ACCENT_TXT = ""
+LEVEL_TINT: dict = {}
+
+
+def apply_theme(name: str) -> None:
+    global THEME, BG, CARD, BORDER, MUTED, TEXT, SOFT, HOVER, ACTIVE, INFO, INFO_BORDER
+    global WARN_BG, TROUGH, TREE_HEAD, SEL, BTN, BTN_HOVER, ACCENT_TXT, LEVEL_TINT
+    THEME = name if name in THEMES else "light"
+    t = THEMES[THEME]
+    (BG, CARD, BORDER, MUTED, TEXT, SOFT, HOVER, ACTIVE, INFO, INFO_BORDER, WARN_BG, TROUGH, TREE_HEAD,
+     SEL, BTN, BTN_HOVER, ACCENT_TXT) = (t[k] for k in (
+        "BG", "CARD", "BORDER", "MUTED", "TEXT", "SOFT", "HOVER", "ACTIVE", "INFO", "INFO_BORDER", "WARN_BG",
+        "TROUGH", "TREE_HEAD", "SEL", "BTN", "BTN_HOVER", "ACCENT_TXT"))
+    LEVEL_TINT = dict(t["TINT"])
+
+
+apply_theme("light")
 STATUS_COLOR = {"new": MUTED, "draft": "#7A5AF8", "emailed": TEAL, "replied": GREEN,
                 "call_booked": GREEN, "proposal_sent": "#0E7490", "won": "#15803D",
                 "lost": "#9CA3AF", "no_reply": "#9CA3AF", "later": AMBER, "unsubscribed": RED,
@@ -78,40 +108,147 @@ def setup_style(root: tk.Tk) -> None:
             tkfont.nametofont(name).configure(family=FONT, size=10)
         except tk.TclError:
             pass
-    st.configure(".", background=BG, foreground=TEXT, font=F(10))
+    root.configure(bg=BG)
+    st.configure(".", background=BG, foreground=TEXT, font=F(10), bordercolor=BORDER,
+                 lightcolor=BORDER, darkcolor=BORDER, troughcolor=TROUGH, focuscolor=TEAL)
     st.configure("Card.TFrame", background=CARD)
-    st.configure("TLabel", background=BG)
-    st.configure("Card.TLabel", background=CARD)
+    st.configure("TLabel", background=BG, foreground=TEXT)
+    st.configure("Card.TLabel", background=CARD, foreground=TEXT)
     st.configure("Muted.TLabel", background=CARD, foreground=MUTED, font=F(9))
-    st.configure("H1.TLabel", background=BG, font=F(18, "bold"))
+    st.configure("H1.TLabel", background=BG, foreground=TEXT, font=F(19, "bold"))
     st.configure("Sub.TLabel", background=BG, foreground=MUTED)
-    st.configure("CardTitle.TLabel", background=CARD, font=F(11, "bold"))
-    st.configure("TCheckbutton", background=CARD)
-    st.map("TCheckbutton", background=[("active", CARD)])
-    st.configure("TRadiobutton", background=CARD)
-    st.map("TRadiobutton", background=[("active", CARD)])
-    st.configure("TButton", padding=(12, 6), relief="flat", background="#E9EEF3",
-                 bordercolor=BORDER)
-    st.map("TButton", background=[("active", "#DCE3EA"), ("disabled", "#F0F2F5")])
-    for name, bg, act in (("Primary", TEAL, TEAL_DARK), ("Danger", RED, RED_DARK),
-                          ("Dark", NAVY, "#24384C"), ("Warn", AMBER, "#D9771F")):
-        st.configure(f"{name}.TButton", background=bg, foreground="white",
-                     font=F(10, "bold"), padding=(14, 7))
-        st.map(f"{name}.TButton", background=[("active", act), ("disabled", "#B8C2CC")],
-               foreground=[("disabled", "#EEF1F4")])
-    st.configure("Treeview", rowheight=28, background=CARD, fieldbackground=CARD,
-                 bordercolor=BORDER, font=F(10))
-    st.configure("Treeview.Heading", background="#EEF2F6", font=F(9, "bold"),
-                 foreground=MUTED, relief="flat", padding=(6, 5))
-    st.map("Treeview", background=[("selected", "#CDEBF1")], foreground=[("selected", TEXT)])
+    st.configure("CardTitle.TLabel", background=CARD, foreground=TEXT, font=F(11, "bold"))
+    for w in ("TCheckbutton", "TRadiobutton"):
+        st.configure(w, background=CARD, foreground=TEXT, indicatorbackground=CARD,
+                     indicatorforeground=TEAL, upperbordercolor=BORDER, lowerbordercolor=BORDER)
+        st.map(w, background=[("active", CARD)], indicatorbackground=[("selected", CARD)],
+               indicatorforeground=[("selected", TEAL)])
+    st.configure("TButton", padding=(12, 6), relief="flat", background=BTN, foreground=TEXT)
+    st.map("TButton", background=[("active", BTN_HOVER)])
+    st.configure("TMenubutton", background=BTN, foreground=TEXT, relief="flat", padding=(10, 6),
+                 arrowcolor=MUTED)
+    st.map("TMenubutton", background=[("active", BTN_HOVER)])
+    st.configure("Treeview", rowheight=32, background=CARD, fieldbackground=CARD, foreground=TEXT,
+                 bordercolor=BORDER, font=F(10), borderwidth=0)
+    st.configure("Treeview.Heading", background=TREE_HEAD, font=F(9, "bold"), foreground=MUTED,
+                 relief="flat", padding=(8, 7), bordercolor=BORDER)
+    st.map("Treeview.Heading", background=[("active", TREE_HEAD)])
+    st.map("Treeview", background=[("selected", SEL)], foreground=[("selected", TEXT)])
     for name, col in (("Teal", TEAL), ("Red", RED)):
-        st.configure(f"{name}.Horizontal.TProgressbar", background=col, troughcolor="#E3E8EE",
-                     bordercolor="#E3E8EE", lightcolor=col, darkcolor=col, thickness=10)
-    st.configure("TNotebook", background=BG, borderwidth=0)
-    st.configure("TNotebook.Tab", padding=(14, 6), font=F(10))
-    st.map("TNotebook.Tab", background=[("selected", CARD)])
-    st.configure("TEntry", padding=5)
-    st.configure("TCombobox", padding=4)
+        st.configure(f"{name}.Horizontal.TProgressbar", background=col, troughcolor="#2A3A4B",
+                     bordercolor="#2A3A4B", lightcolor=col, darkcolor=col, thickness=8)
+    st.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(0, 0, 0, 0))
+    st.configure("TNotebook.Tab", padding=(16, 8), font=F(10), background=BG, foreground=MUTED,
+                 bordercolor=BORDER)
+    st.map("TNotebook.Tab", background=[("selected", CARD)], foreground=[("selected", TEXT)])
+    for w in ("TEntry", "TCombobox", "TSpinbox"):
+        st.configure(w, fieldbackground=SOFT, foreground=TEXT, bordercolor=BORDER, lightcolor=BORDER,
+                     darkcolor=BORDER, padding=6, insertcolor=TEXT, arrowcolor=MUTED, background=CARD)
+        st.map(w, bordercolor=[("focus", TEAL)], lightcolor=[("focus", TEAL)],
+               fieldbackground=[("readonly", SOFT)], foreground=[("readonly", TEXT)])
+    for k, v in (("*Label.foreground", TEXT), ("*Text.background", SOFT), ("*Text.foreground", TEXT), ("*Text.insertBackground", TEXT),
+                 ("*Text.selectBackground", SEL), ("*Text.selectForeground", TEXT),
+                 ("*Listbox.background", CARD), ("*Listbox.foreground", TEXT),
+                 ("*Menu.background", CARD), ("*Menu.foreground", TEXT),
+                 ("*Menu.activeBackground", TEAL), ("*Menu.activeForeground", "#FFFFFF")):
+        root.option_add(k, v)
+    root.option_add("*TCombobox*Listbox.background", CARD)
+    root.option_add("*TCombobox*Listbox.foreground", TEXT)
+    root.option_add("*TCombobox*Listbox.selectBackground", TEAL)
+    root.option_add("*TCombobox*Listbox.font", F(10))
+    for sb in ("TScrollbar", "Vertical.TScrollbar", "Horizontal.TScrollbar"):
+        st.configure(sb, background=BTN, troughcolor=CARD, bordercolor=CARD, lightcolor=BTN,
+                     darkcolor=BTN, arrowcolor=MUTED, gripcount=0, relief="flat")
+        st.map(sb, background=[("active", BTN_HOVER)])
+    st.configure("TPanedwindow", background=BG)
+    st.configure("TSeparator", background=BORDER)
+
+
+class Btn(tk.Canvas):
+    """Rounded, modern button (drop-in for the simple ttk.Button uses in this app)."""
+    KINDS = {"Primary.TButton": "primary", "Danger.TButton": "danger", "Dark.TButton": "dark",
+             "Warn.TButton": "warn"}
+
+    def __init__(self, parent, text="", command=None, style=None, state="normal", width=None, **kw):
+        try:
+            pbg = parent.cget("bg")
+        except tk.TclError:
+            pbg = BG
+        super().__init__(parent, highlightthickness=0, bd=0, bg=pbg, cursor="hand2", height=34)
+        import tkinter.font as tkfont
+        self.kind = self.KINDS.get(style, "default")
+        self.font = tkfont.Font(family=FONT, size=10, weight="normal" if self.kind == "default" else "bold")
+        self._text, self._cmd, self._state, self._wchars, self._hover = text, command, state, width, False
+        self.bind("<Enter>", lambda e: self._set_hover(True))
+        self.bind("<Leave>", lambda e: self._set_hover(False))
+        self.bind("<ButtonRelease-1>", self._click)
+        self.bind("<Configure>", lambda e: self._draw())
+        self._size()
+        self._draw()
+
+    def _colors(self):
+        base = {"primary": (TEAL, TEAL_DARK, "#FFFFFF"), "danger": (RED, RED_DARK, "#FFFFFF"),
+                "dark": (NAVY if THEME == "light" else "#2B3D50", "#24384C" if THEME == "light" else "#36506A", "#FFFFFF"),
+                "warn": (AMBER, "#D9771F", "#FFFFFF"), "default": (BTN, BTN_HOVER, TEXT)}[self.kind]
+        if self._state == "disabled":
+            return (TROUGH, TROUGH, MUTED)
+        return (base[1] if self._hover else base[0], None, base[2])
+
+    def _size(self):
+        w = self.font.measure(self._text) + 28
+        if self._wchars:
+            w = max(w, int(self._wchars * self.font.measure("0") + 24))
+        super().configure(width=w)
+
+    def _draw(self):
+        self.delete("all")
+        w = max(self.winfo_width(), int(float(self.cget("width")))) if self.winfo_ismapped() else int(float(self.cget("width")))
+        w = self.winfo_width() if self.winfo_ismapped() and self.winfo_width() > 10 else w
+        h, r = 34, 8
+        fill, _, fg = self._colors()
+        pts = [r, 1, w - r, 1, w - 1, 1, w - 1, r, w - 1, h - r, w - 1, h - 1, w - r, h - 1, r, h - 1,
+               1, h - 1, 1, h - r, 1, r, 1, 1]
+        self.create_polygon(pts, smooth=True, fill=fill, outline=fill)
+        self.create_text(w / 2, h / 2, text=self._text, fill=fg, font=self.font)
+        super().configure(cursor="arrow" if self._state == "disabled" else "hand2")
+
+    def _set_hover(self, v):
+        self._hover = v and self._state != "disabled"
+        self._draw()
+
+    def _click(self, e):
+        if self._state != "disabled" and 0 <= e.x <= self.winfo_width() and 0 <= e.y <= self.winfo_height():
+            self.invoke()
+
+    def invoke(self):
+        if self._cmd and self._state != "disabled":
+            return self._cmd()
+
+    def configure(self, cnf=None, **kw):
+        if cnf:
+            kw.update(cnf)
+        changed = False
+        for key, attr in (("text", "_text"), ("state", "_state"), ("command", "_cmd")):
+            if key in kw:
+                setattr(self, attr, kw.pop(key))
+                changed = True
+        if "style" in kw:
+            self.kind = self.KINDS.get(kw.pop("style"), "default")
+            changed = True
+        if kw:
+            super().configure(**kw)
+        if changed:
+            self._size()
+            self._draw()
+
+    config = configure
+
+    def cget(self, key):
+        if key == "text":
+            return self._text
+        if key == "state":
+            return self._state
+        return super().cget(key)
 
 
 def card(parent, title: str | None = None, sub: str | None = None, pad=14):
@@ -128,20 +265,21 @@ def card(parent, title: str | None = None, sub: str | None = None, pad=14):
     return outer
 
 
-def badge(parent, text, color, bg=CARD):
+def badge(parent, text, color, bg=None):
     return tk.Label(parent, text=f" {text} ", bg=color, fg="white", font=F(9, "bold"),
                     padx=6, pady=1)
 
 
-def link(parent, text, url, bg=CARD, size=10):
-    lb = tk.Label(parent, text=text, fg=TEAL, bg=bg, cursor="hand2", font=F(size, "underline"),
+def link(parent, text, url, bg=None, size=10):
+    lb = tk.Label(parent, text=text, fg=ACCENT_TXT, bg=bg or CARD, cursor="hand2", font=F(size, "underline"),
                   anchor="w", justify="left")
     lb.bind("<Button-1>", lambda e: open_url(url))
     return lb
 
 
 class ScrollFrame(tk.Frame):
-    def __init__(self, parent, bg=CARD):
+    def __init__(self, parent, bg=None):
+        bg = bg or CARD
         super().__init__(parent, bg=bg)
         self.canvas = tk.Canvas(self, bg=bg, highlightthickness=0)
         self.vsb = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
@@ -217,6 +355,7 @@ class App:
         self.yp_proc = None
         self.session_captured = []
         root.title(f"NA Developers · Wix Lead Bot {W.VERSION}")
+        apply_theme(self.cfg.get("theme", "light"))
         root.configure(bg=BG)
         root.geometry("1340x860")
         root.minsize(1180, 740)
@@ -227,12 +366,30 @@ class App:
         self.show_login()
         root.protocol("WM_DELETE_WINDOW", self.on_close)
 
+    def toggle_theme(self):
+        new = "dark" if THEME == "light" else "light"
+        self.cfg.set("theme", new)
+        self.cfg.save()
+        apply_theme(new)
+        current = self.current or "dashboard"
+        self.main_frame.destroy()
+        self.main_frame = None
+        setup_style(self.root)
+        self._load_images()
+        self.build_main()
+        self.show(current)
+
     def _load_images(self):
+        suffix = "_dark" if THEME == "dark" else "_t"
         for name in ("logo_sidebar", "logo_login", "mark64"):
-            try:
-                self.images[name] = tk.PhotoImage(file=os.path.join(ASSETS, name + ".png"))
-            except tk.TclError:
-                self.images[name] = None
+            img = None
+            for cand in ((name + suffix) if name != "mark64" else name, name):
+                try:
+                    img = tk.PhotoImage(file=os.path.join(ASSETS, cand + ".png"))
+                    break
+                except tk.TclError:
+                    continue
+            self.images[name] = img
         if self.images.get("mark64"):
             self.root.iconphoto(True, self.images["mark64"])
         ico = os.path.join(ASSETS, "icon.ico")
@@ -292,7 +449,7 @@ class App:
             self.login_frame = None
             self.open_main()
 
-        ttk.Button(b, text="Create password and start" if first else "Unlock",
+        Btn(b, text="Create password and start" if first else "Unlock",
                    style="Primary.TButton", command=go).pack(fill="x", pady=(8, 0))
         e1.bind("<Return>", go)
         e1.focus_set()
@@ -387,6 +544,7 @@ class App:
 
     # ---------------- main layout ----------------
     def build_main(self):
+        self.current = None
         m = self.main_frame = tk.Frame(self.root, bg=BG)
         m.pack(fill="both", expand=True)
         side = tk.Frame(m, bg=CARD, width=236, highlightthickness=1, highlightbackground=BORDER)
@@ -396,18 +554,25 @@ class App:
             tk.Label(side, image=self.images["logo_sidebar"], bg=CARD).pack(pady=(22, 4), padx=12)
         tk.Label(side, text="WIX LEAD BOT", bg=CARD, fg=MUTED, font=F(8, "bold")).pack(pady=(0, 18))
         self.nav = {}
-        items = [("dashboard", "⌂  Dashboard"), ("find", "⌕  Find leads"),
-                 ("yp", "☰  Yellow Pages"), ("leads", "★  Leads"),
-                 ("outreach", "✉  Outreach"), ("pipeline", "▤  Pipeline"),
-                 ("coverage", "▦  Coverage"), ("settings", "⚙  Settings")]
-        for key, text in items:
-            lb = tk.Label(side, text=text, bg=CARD, fg=TEXT, font=F(11), anchor="w",
-                          padx=22, pady=9, cursor="hand2")
-            lb.pack(fill="x", padx=10, pady=1)
-            lb.bind("<Button-1>", lambda e, k=key: self.show(k))
-            lb.bind("<Enter>", lambda e, l=lb, k=key: l.config(bg="#EEF6F8") if self.current != k else None)
-            lb.bind("<Leave>", lambda e, l=lb, k=key: l.config(bg=CARD) if self.current != k else None)
-            self.nav[key] = lb
+        items = [("dashboard", "⌂", "Dashboard"), ("find", "⌕", "Find leads"),
+                 ("yp", "☰", "Yellow Pages"), ("leads", "★", "Leads"),
+                 ("outreach", "✉", "Outreach"), ("pipeline", "▤", "Pipeline"),
+                 ("coverage", "▦", "Coverage"), ("settings", "⚙", "Settings")]
+        tk.Frame(side, bg=BORDER, height=1).pack(fill="x", padx=18, pady=(0, 10))
+        for key, icon, text in items:
+            row = tk.Frame(side, bg=CARD, cursor="hand2")
+            row.pack(fill="x", padx=12, pady=2)
+            bar = tk.Frame(row, bg=CARD, width=4)
+            bar.pack(side="left", fill="y")
+            ic = tk.Label(row, text=icon, bg=CARD, fg=MUTED, font=F(13), width=2, cursor="hand2")
+            ic.pack(side="left", padx=(12, 4), pady=8)
+            lb = tk.Label(row, text=text, bg=CARD, fg=TEXT, font=F(11), anchor="w", cursor="hand2")
+            lb.pack(side="left", fill="x", expand=True)
+            for w in (row, ic, lb):
+                w.bind("<Button-1>", lambda e, k=key: self.show(k))
+                w.bind("<Enter>", lambda e, k=key: self._nav_hover(k, True))
+                w.bind("<Leave>", lambda e, k=key: self._nav_hover(k, False))
+            self.nav[key] = (row, bar, ic, lb)
         bottom = tk.Frame(side, bg=CARD)
         bottom.pack(side="bottom", fill="x", pady=14, padx=16)
         self.inbox_lbl = tk.Label(bottom, bg=CARD, fg=MUTED, font=F(8), justify="left", anchor="w")
@@ -415,9 +580,13 @@ class App:
         self.inbox_lbl.config(text=("● Capture inbox on" if self.inbox else
                                     "● Capture inbox off (port busy)"),
                               fg=GREEN if self.inbox else RED)
-        ttk.Button(bottom, text="⬆  Check for updates",
-                   command=lambda: self.check_updates(True)).pack(fill="x", pady=(8, 0))
-        ttk.Button(bottom, text="🔒  Lock", command=self.lock).pack(fill="x", pady=(6, 0))
+        Btn(bottom, text="⬆  Check for updates",
+            command=lambda: self.check_updates(True)).pack(fill="x", pady=(8, 0))
+        rowb = tk.Frame(bottom, bg=CARD)
+        rowb.pack(fill="x", pady=(6, 0))
+        Btn(rowb, text="☀  Light" if THEME == "dark" else "☾  Dark", command=self.toggle_theme).pack(
+            side="left", fill="x", expand=True, padx=(0, 3))
+        Btn(rowb, text="🔒  Lock", command=self.lock).pack(side="left", fill="x", expand=True, padx=(3, 0))
         tk.Label(bottom, text=f"v{W.VERSION} · nadevelopers.com", bg=CARD, fg=MUTED,
                  font=F(8)).pack(pady=(8, 0))
 
@@ -427,7 +596,7 @@ class App:
         self.update_frame = tk.Frame(right, bg=TEAL)
         self.update_bar = tk.Label(self.update_frame, bg=TEAL, fg="white", font=F(10, "bold"), pady=8)
         self.update_bar.pack(side="left", padx=12)
-        ttk.Button(self.update_frame, text="Update now", style="Dark.TButton",
+        Btn(self.update_frame, text="Update now", style="Dark.TButton",
                    command=self.install_update).pack(side="left", pady=6)
         tk.Label(self.update_frame, text="Later", bg=TEAL, fg="white", cursor="hand2",
                  font=F(9, "underline")).pack(side="left", padx=12)
@@ -443,10 +612,22 @@ class App:
         self.current = None
         self.show("dashboard")
 
+    def _nav_hover(self, key, on):
+        if key == self.current:
+            return
+        row, bar, ic, lb = self.nav[key]
+        for w in (row, ic, lb):
+            w.config(bg=HOVER if on else CARD)
+        bar.config(bg=HOVER if on else CARD)
+
     def show(self, key, **kw):
-        for k, lb in self.nav.items():
-            lb.config(bg="#E3F2F5" if k == key else CARD, fg=TEAL_DARK if k == key else TEXT,
-                      font=F(11, "bold") if k == key else F(11))
+        for k, (row, bar, ic, lb) in self.nav.items():
+            on = k == key
+            for w in (row, ic, lb):
+                w.config(bg=ACTIVE if on else CARD)
+            bar.config(bg=TEAL if on else CARD)
+            ic.config(fg=ACCENT_TXT if on else MUTED)
+            lb.config(fg=ACCENT_TXT if on else TEXT, font=F(11, "bold") if on else F(11))
         for p in self.pages.values():
             p.frame.pack_forget()
         self.current = key
@@ -488,10 +669,10 @@ class App:
         self.job_detail.pack(fill="x", pady=(4, 0))
         btns = tk.Frame(bar, bg=NAVY)
         btns.pack(side="right", padx=18)
-        self.btn_pause = ttk.Button(btns, text="⏸  Pause", style="Warn.TButton",
+        self.btn_pause = Btn(btns, text="⏸  Pause", style="Warn.TButton",
                                     command=self.toggle_pause, state="disabled", width=11)
         self.btn_pause.pack(side="left", padx=4)
-        self.btn_stop = ttk.Button(btns, text="■  Stop", style="Danger.TButton",
+        self.btn_stop = Btn(btns, text="■  Stop", style="Danger.TButton",
                                    command=self.stop_job, state="disabled", width=9)
         self.btn_stop.pack(side="left", padx=4)
         self.prog = {}
@@ -723,7 +904,7 @@ class DashboardPage(Page):
         today.pack(fill="x")
         self.today = tk.Label(today.inner, bg=CARD, justify="left", anchor="w", font=F(10))
         self.today.pack(fill="x", pady=(6, 10))
-        ttk.Button(today.inner, text="Open outreach queue", style="Primary.TButton",
+        Btn(today.inner, text="Open outreach queue", style="Primary.TButton",
                    command=lambda: self.app.show("outreach")).pack(fill="x")
         legend = card(right, "Lead levels")
         legend.pack(fill="x", pady=(14, 0))
@@ -787,12 +968,12 @@ class DashboardPage(Page):
         for text, cmd, tid in items:
             r = tk.Frame(self.todo_box, bg=CARD)
             r.pack(fill="x", pady=2)
-            lb = tk.Label(r, text=text, bg=CARD, fg=TEAL_DARK, cursor="hand2", font=F(9, "bold"),
+            lb = tk.Label(r, text=text, bg=CARD, fg=ACCENT_TXT, cursor="hand2", font=F(9, "bold"),
                           wraplength=230, justify="left", anchor="w")
             lb.pack(side="left", fill="x", expand=True)
             lb.bind("<Button-1>", lambda e, c=cmd: c())
             if tid:
-                ttk.Button(r, text="Done", width=5, command=lambda t=tid: (O.done_task(db, t), self.refresh())).pack(side="right")
+                Btn(r, text="Done", width=5, command=lambda t=tid: (O.done_task(db, t), self.refresh())).pack(side="right")
         self.res_tree.delete(*self.res_tree.get_children())
         for row in O.funnel(db):
             lab = self.app.cats.get(row["category"], {}).get("short") or row["category"].replace("_", " ").title()
@@ -843,7 +1024,7 @@ class FindPage(Page):
         self.regions.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
         self.regions.bind("<<ListboxSelect>>", lambda e: self.mark_categories())
-        ttk.Button(c1.inner, text="Select all", command=self.select_all).pack(fill="x", pady=(6, 0))
+        Btn(c1.inner, text="Select all", command=self.select_all).pack(fill="x", pady=(6, 0))
         # 2. what
         c3 = card(top, "3.  How")
         c3.pack(side="right", fill="y")
@@ -852,9 +1033,9 @@ class FindPage(Page):
         tb = tk.Frame(c2.inner, bg=CARD)
         tb.pack(fill="x", pady=(0, 6))
         for t in ("A", "B", "C"):
-            ttk.Button(tb, text=f"Tier {t}", width=7, command=lambda t=t: self.pick_tier(t)).pack(side="left", padx=(0, 4))
-        ttk.Button(tb, text="All", width=5, command=lambda: self.pick_tier("ABC")).pack(side="left", padx=(0, 4))
-        ttk.Button(tb, text="None", width=6, command=lambda: self.pick_tier("")).pack(side="left")
+            Btn(tb, text=f"Tier {t}", width=7, command=lambda t=t: self.pick_tier(t)).pack(side="left", padx=(0, 4))
+        Btn(tb, text="All", width=5, command=lambda: self.pick_tier("ABC")).pack(side="left", padx=(0, 4))
+        Btn(tb, text="None", width=6, command=lambda: self.pick_tier("")).pack(side="left")
         grid = tk.Frame(c2.inner, bg=CARD)
         grid.pack(fill="both", expand=True)
         self.cat_vars, self.cat_checks = {}, {}
@@ -881,9 +1062,9 @@ class FindPage(Page):
         ttk.Label(wr, text="Sites at once", style="Card.TLabel").pack(side="left")
         self.workers = tk.IntVar(value=W.DEFAULT_WORKERS)
         ttk.Spinbox(wr, from_=1, to=24, textvariable=self.workers, width=4).pack(side="left", padx=6)
-        ttk.Button(c3.inner, text="▶  Start search", style="Primary.TButton",
+        Btn(c3.inner, text="▶  Start search", style="Primary.TButton",
                    command=self.start).pack(fill="x", pady=(16, 4))
-        ttk.Button(c3.inner, text="Check my own list of websites…",
+        Btn(c3.inner, text="Check my own list of websites…",
                    command=self.start_urls).pack(fill="x", pady=2)
         ttk.Separator(c3.inner).pack(fill="x", pady=10)
         ttk.Label(c3.inner, text="Deep hunt: free wixsite.com sites", style="CardTitle.TLabel").pack(anchor="w")
@@ -894,9 +1075,9 @@ class FindPage(Page):
         ttk.Label(hr, text="Pages", style="Card.TLabel").pack(side="left")  # hunt only
         self.hunt_pages = tk.IntVar(value=3)
         ttk.Spinbox(hr, from_=1, to=50, textvariable=self.hunt_pages, width=4).pack(side="left", padx=6)
-        ttk.Button(hr, text="Run hunt", style="Dark.TButton", command=self.start_hunt).pack(side="left", fill="x", expand=True)
-        self.hunt_lbl = tk.Label(c3.inner, bg="#F5FAFB", fg=TEXT, font=F(9), justify="left", anchor="w",
-                                 padx=8, pady=6, highlightthickness=1, highlightbackground="#D5EBF0")
+        Btn(hr, text="Run hunt", style="Dark.TButton", command=self.start_hunt).pack(side="left", fill="x", expand=True)
+        self.hunt_lbl = tk.Label(c3.inner, bg=INFO, fg=TEXT, font=F(9), justify="left", anchor="w",
+                                 padx=8, pady=6, highlightthickness=1, highlightbackground=INFO_BORDER)
         self.hunt_lbl.pack(fill="x", pady=(8, 0))
         # log
         lc = card(self.body, pad=8)
@@ -1078,7 +1259,7 @@ class YPPage(Page):
         ttk.Label(b, text="City", style="Card.TLabel").pack(anchor="w", pady=(10, 2))
         self.city = tk.StringVar(value="Houston")
         ttk.Entry(b, textvariable=self.city).pack(fill="x")
-        ttk.Button(b, text="☰  Open Yellow Pages", style="Primary.TButton",
+        Btn(b, text="☰  Open Yellow Pages", style="Primary.TButton",
                    command=self.open_yp).pack(fill="x", pady=(16, 6))
         steps = ("How it works\n"
                  "1. Click Open. A Yellow Pages window opens.\n"
@@ -1086,8 +1267,8 @@ class YPPage(Page):
                  "3. Scroll the results. A dark badge shows how\n    many websites were captured.\n"
                  "4. Click Next page in Yellow Pages for more.\n"
                  "5. Come back and click “Check captured\n    websites” to find the Wix ones.")
-        tk.Label(b, text=steps, bg="#F5FAFB", fg=TEXT, justify="left", font=F(9), padx=10, pady=10,
-                 highlightthickness=1, highlightbackground="#D5EBF0").pack(fill="x", pady=(10, 0))
+        tk.Label(b, text=steps, bg=INFO, fg=TEXT, justify="left", font=F(9), padx=10, pady=10,
+                 highlightthickness=1, highlightbackground=INFO_BORDER).pack(fill="x", pady=(10, 0))
         tk.Label(b, text="Google Maps: use the Chrome helper. Open one business on Maps,\n"
                  "click the helper, then 'Check if Wix & save to app'. Load the helper\n"
                  "from the 'chrome-helper' folder next to WixLeadBot.exe\n"
@@ -1107,7 +1288,7 @@ class YPPage(Page):
         self.tree.bind("<Double-1>", self._dbl)
         br = tk.Frame(r, bg=CARD)
         br.pack(fill="x", pady=(10, 0))
-        ttk.Button(br, text="✓  Check captured websites for Wix", style="Primary.TButton",
+        Btn(br, text="✓  Check captured websites for Wix", style="Primary.TButton",
                    command=self.check).pack(side="left")
         self.only_new = tk.BooleanVar(value=True)
         ttk.Checkbutton(br, text="Show this session only", variable=self.only_new,
@@ -1229,7 +1410,7 @@ class LeadsPage(Page):
                            values=["Any contact", "Has email", "No email (call list)"])
         cbe.pack(side="left", padx=8)
         cbe.bind("<<ComboboxSelected>>", lambda ev: self.fill())
-        ttk.Button(bar, text="Export CSV", command=self.export).pack(side="right")
+        Btn(bar, text="Export CSV", command=self.export).pack(side="right")
         self.legend = tk.Frame(self.body, bg=BG)
         self.legend.pack(fill="x", pady=(0, 8))
 
@@ -1447,17 +1628,17 @@ class Profile:
         cv = tk.Canvas(sb, height=12, bg=CARD, highlightthickness=0)
         cv.pack(fill="x", pady=(4, 0))
         cv.bind("<Configure>", lambda e, c=cv: (c.delete("all"),
-                c.create_rectangle(0, 0, e.width, 12, fill="#E9EEF3", outline=""),
+                c.create_rectangle(0, 0, e.width, 12, fill=TROUGH, outline=""),
                 c.create_rectangle(0, 0, e.width * sc / 100, 12, fill=col, outline="")))
 
         acts = tk.Frame(b, bg=CARD)
         acts.pack(fill="x", padx=18, pady=(14, 0))
-        ttk.Button(acts, text="✉  Write email", style="Primary.TButton",
+        Btn(acts, text="✉  Write email", style="Primary.TButton",
                    command=self.draft).pack(side="left")
-        ttk.Button(acts, text="Open website",
+        Btn(acts, text="Website",
                    command=lambda: open_url(lead.get("final_url") or lead.get("website"))).pack(side="left", padx=6)
-        ttk.Button(acts, text="Call brief", command=self.open_brief).pack(side="left")
-        mb = ttk.Menubutton(acts, text="More ▾")
+        Btn(acts, text="Call brief", command=self.open_brief).pack(side="left")
+        mb = ttk.Menubutton(acts, text="More", width=7)
         menu = tk.Menu(mb, tearoff=0)
         menu.add_command(label="Do not contact", command=lambda: self.set_status("do_not_contact"))
         menu.add_command(label="This is my client (never contact)", command=self.mark_client)
@@ -1501,8 +1682,13 @@ class Profile:
             phones.append(lead["listed_phone"])
         self.kv(c, "Phone", lambda f: tk.Label(f, text="\n".join(dict.fromkeys(p.strip() for p in phones)) or "—",
                                                bg=CARD, justify="left").pack(anchor="w"))
-        addr = lead.get("address") or ", ".join(x for x in (lead.get("street"), lead.get("city"),
-                                                             lead.get("postcode")) if x)
+        addr = lead.get("address") or ""
+        if not addr:
+            parts = []
+            for x in (lead.get("street"), lead.get("city"), lead.get("postcode")):
+                if x and not any(x in p for p in parts):
+                    parts.append(x)
+            addr = ", ".join(parts)
         self.kv(c, "Address", lambda f: self.W(tk.Label(f, text=addr or "—", bg=CARD,
                                                         justify="left"), 140).pack(anchor="w"))
 
@@ -1531,7 +1717,7 @@ class Profile:
         self.build_mockup_section(lead)
 
         a = self.section("Quick audit text (paste into an email or a Loom)")
-        t = tk.Text(a, height=12, wrap="word", font=F(9), bg="#F8FAFC", relief="flat",
+        t = tk.Text(a, height=12, wrap="word", font=F(9), bg=SOFT, relief="flat",
                     padx=8, pady=6, highlightthickness=1, highlightbackground=BORDER)
         t.insert("1.0", O.audit_text(lead))
         t.config(state="disabled")
@@ -1562,7 +1748,7 @@ class Profile:
                              highlightthickness=1, highlightbackground=BORDER)
         self.notes.insert("1.0", (O.get_outreach(self.db, lead["domain"]) or {}).get("notes") or "")
         self.notes.pack(fill="x")
-        ttk.Button(o, text="Save notes", command=self.save_notes).pack(anchor="e", pady=(6, 0))
+        Btn(o, text="Save notes", command=self.save_notes).pack(anchor="e", pady=(6, 0))
 
         src = self.section("Source")
         found = {"openstreetmap": "OpenStreetMap", "overture": "Overture Maps",
@@ -1582,7 +1768,7 @@ class Profile:
         if not a:
             tk.Label(sec, text="Not audited yet. Takes about 30-60 seconds.", bg=CARD, fg=MUTED,
                      font=F(9)).pack(anchor="w")
-            ttk.Button(sec, text="Run full audit", style="Dark.TButton",
+            Btn(sec, text="Run full audit", style="Dark.TButton",
                        command=self.run_audit).pack(anchor="w", pady=(6, 0))
             return
         row = tk.Frame(sec, bg=CARD)
@@ -1606,10 +1792,10 @@ class Profile:
             self.W(tk.Label(r, text=f, bg=CARD, justify="left", font=F(9), anchor="w"), 80).pack(side="left", padx=6)
         b = tk.Frame(sec, bg=CARD)
         b.pack(anchor="w", pady=(6, 0))
-        ttk.Button(b, text="Open report", style="Primary.TButton",
+        Btn(b, text="Open report", style="Primary.TButton",
                    command=lambda: open_url("file:///" + a["report"].replace(os.sep, "/"))
                    if a.get("report") else None).pack(side="left")
-        ttk.Button(b, text="Run again", command=self.run_audit).pack(side="left", padx=6)
+        Btn(b, text="Run again", command=self.run_audit).pack(side="left", padx=6)
         tk.Label(sec, text=f"Audited {a.get('created_at', '')[:10]}. Report: Ctrl+P in the browser to save as PDF.",
                  bg=CARD, fg=MUTED, font=F(8)).pack(anchor="w", pady=(4, 0))
 
@@ -1635,7 +1821,7 @@ class Profile:
                      justify="left").pack(anchor="w")
             return
         if not plan:
-            ttk.Button(sec, text="✦  Make plan + email with Gemini", style="Dark.TButton",
+            Btn(sec, text="✦  Make plan + email with Gemini", style="Dark.TButton",
                        command=self.make_plan).pack(anchor="w")
             tk.Label(sec, text="Runs the full audit first if needed.", bg=CARD, fg=MUTED,
                      font=F(8)).pack(anchor="w", pady=(4, 0))
@@ -1652,9 +1838,9 @@ class Profile:
                 self.W(tk.Label(sec, text="• " + str(t), bg=CARD, justify="left", font=F(9), anchor="w"), 60).pack(anchor="w")
         b = tk.Frame(sec, bg=CARD)
         b.pack(anchor="w", pady=(6, 0))
-        ttk.Button(b, text="✉  Use Gemini's email as draft", style="Primary.TButton",
+        Btn(b, text="✉  Use Gemini's email as draft", style="Primary.TButton",
                    command=self.draft_from_plan).pack(side="left")
-        ttk.Button(b, text="Write again", command=self.make_plan).pack(side="left", padx=6)
+        Btn(b, text="Write again", command=self.make_plan).pack(side="left", padx=6)
 
     def make_plan(self):
         lead = self.lead
@@ -1681,7 +1867,7 @@ class Profile:
     def build_mockup_section(self, lead):
         sec = self.section("Mockup (make it in the Gemini app)")
         prompt = ai.mockup_prompt(lead, A.get(self.db, lead["domain"]), ai.get_plan(self.db, lead["domain"]))
-        t = tk.Text(sec, height=7, wrap="word", font=F(9), bg="#F8FAFC", relief="flat", padx=8, pady=6,
+        t = tk.Text(sec, height=7, wrap="word", font=F(9), bg=SOFT, relief="flat", padx=8, pady=6,
                     highlightthickness=1, highlightbackground=BORDER)
         t.insert("1.0", prompt)
         t.config(state="disabled")
@@ -1693,9 +1879,9 @@ class Profile:
             self.app.root.clipboard_clear()
             self.app.root.clipboard_append(prompt)
             self.app.toast("Mockup prompt copied. Paste it into Gemini.")
-        ttk.Button(b, text="Copy prompt", style="Primary.TButton", command=copy).pack(side="left")
-        ttk.Button(b, text="Open Gemini", command=lambda: (copy(), open_url(ai.GEMINI_APP))).pack(side="left", padx=6)
-        ttk.Button(b, text="Attach mockup…", command=self.attach_mockup).pack(side="left")
+        Btn(b, text="Copy prompt", style="Primary.TButton", command=copy).pack(side="left")
+        Btn(b, text="Open Gemini", command=lambda: (copy(), open_url(ai.GEMINI_APP))).pack(side="left", padx=6)
+        Btn(b, text="Attach mockup…", command=self.attach_mockup).pack(side="left")
         mf = A.mockup_file(lead["domain"])
         if mf:
             tk.Label(sec, text="Mockup saved ✓ (shown in the call brief, can be attached to emails)",
@@ -1810,14 +1996,14 @@ class OutreachPage(Page):
         self.summary.pack(fill="x", pady=(0, 10))
         row = tk.Frame(t, bg=CARD)
         row.pack(fill="x")
-        ttk.Button(row, text="✦  Gemini emails for Super + Hot", style="Dark.TButton",
+        Btn(row, text="✦  Gemini emails (Super + Hot)", style="Dark.TButton",
                    command=self.bulk_ai).pack(side="left")
-        ttk.Button(row, text="Template emails", command=self.bulk).pack(side="left", padx=(6, 0))
-        ttk.Button(row, text="⟳  Create due follow-ups", command=self.followups).pack(side="left", padx=6)
-        ttk.Button(row, text="↩  Check inbox for replies", command=self.inbox).pack(side="left")
-        ttk.Button(row, text="✉  Send approved emails", style="Primary.TButton",
+        Btn(row, text="Templates", command=self.bulk).pack(side="left", padx=(6, 0))
+        Btn(row, text="⟳  Follow-ups", command=self.followups).pack(side="left", padx=6)
+        Btn(row, text="↩  Check inbox", command=self.inbox).pack(side="left")
+        Btn(row, text="✉  Send approved", style="Primary.TButton",
                    command=self.send).pack(side="right")
-        self.warn = tk.Label(self.body, bg="#FDE7E8", fg=RED_DARK, font=F(9, "bold"), anchor="w",
+        self.warn = tk.Label(self.body, bg=WARN_BG, fg=RED_DARK, font=F(9, "bold"), anchor="w",
                              padx=10, pady=6, cursor="hand2")
         self.warn.bind("<Button-1>", lambda e: self.app.show("settings"))
 
@@ -1853,18 +2039,22 @@ class OutreachPage(Page):
         self.body_t = tk.Text(r, wrap="word", font=F(10), relief="flat", padx=10, pady=8,
                               highlightthickness=1, highlightbackground=BORDER, height=16)
         self.body_t.pack(fill="both", expand=True, pady=(6, 8))
+        self.att_lbl = tk.Label(r, bg=CARD, fg=MUTED, font=F(8), anchor="w")
+        self.att_lbl.pack(fill="x")
         br = tk.Frame(r, bg=CARD)
         br.pack(fill="x")
-        self.btn_approve = ttk.Button(br, text="✓  Approve", style="Primary.TButton", command=self.approve)
+        self.btn_approve = Btn(br, text="✓  Approve", style="Primary.TButton", command=self.approve)
         self.btn_approve.pack(side="left")
-        ttk.Button(br, text="Save changes", command=self.save).pack(side="left", padx=6)
-        ttk.Button(br, text="Skip", command=lambda: self.set_selected("cancelled")).pack(side="left")
-        ttk.Button(br, text="Open profile", command=self.profile).pack(side="right")
-        ttk.Button(br, text="📎 Attach", command=self.attach).pack(side="right", padx=(0, 6))
-        self.btn_answer = ttk.Button(br, text="✎  Draft an answer", style="Dark.TButton", command=self.answer)
-        self.att_lbl = tk.Label(r, bg=CARD, fg=MUTED, font=F(8), anchor="w")
-        self.att_lbl.pack(fill="x", before=br)
-        ttk.Button(br, text="Approve all shown", command=self.approve_all).pack(side="right", padx=6)
+        Btn(br, text="Save", command=self.save).pack(side="left", padx=6)
+        Btn(br, text="Skip", command=lambda: self.set_selected("cancelled")).pack(side="left")
+        Btn(br, text="Approve all", command=self.approve_all).pack(side="right")
+        self.btn_answer = Btn(br, text="✎  Draft an answer", style="Dark.TButton", command=self.answer)
+        br2 = tk.Frame(r, bg=CARD)
+        br2.pack(fill="x", pady=(8, 0))
+        Btn(br2, text="👁  Preview", command=self.preview).pack(side="left")
+        Btn(br2, text="📎  Attach", command=self.attach).pack(side="left", padx=6)
+        Btn(br2, text="Open profile", command=self.profile).pack(side="left")
+
         self.cur = None
         self.names = {}
 
@@ -2023,6 +2213,13 @@ class OutreachPage(Page):
         self.app.run_job("Gemini emails", lambda: O.ai_draft_many(self.db, self.app.cfg, psi_key=key),
                          after=lambda n: (self.filter.set("draft"), self.refresh()))
 
+    def preview(self):
+        if not self.cur:
+            return
+        self.save(quiet=True)
+        m = next((x for x in O.messages(self.db) if x["id"] == self.cur["id"]), self.cur)
+        open_url("file:///" + O.preview_file(self.app.cfg, m).replace(os.sep, "/"))
+
     def attach(self):
         if not self.cur or self.cur["status"] not in ("draft", "approved", "failed"):
             return messagebox.showinfo("Attach", "Pick a draft first.")
@@ -2125,12 +2322,12 @@ class PipelinePage(Page):
         bar.pack(fill="x", pady=(0, 8))
         self.flabel = tk.Label(bar, text="All", bg=CARD, font=F(11, "bold"))
         self.flabel.pack(side="left")
-        ttk.Button(bar, text="Show all", command=lambda: self.set_filter(None)).pack(side="left", padx=10)
-        ttk.Button(bar, text="Open profile", command=self.open).pack(side="right")
-        ttk.Button(bar, text="Call brief", command=self.brief).pack(side="right", padx=4)
+        Btn(bar, text="Show all", command=lambda: self.set_filter(None)).pack(side="left", padx=10)
+        Btn(bar, text="Open profile", command=self.open).pack(side="right")
+        Btn(bar, text="Call brief", command=self.brief).pack(side="right", padx=4)
         for key, label in (("won", "Won"), ("lost", "Lost"), ("later", "Not now"), ("proposal_sent", "Proposal sent"),
                            ("call_booked", "Call booked"), ("replied", "Replied")):
-            ttk.Button(bar, text=f"→ {label}", command=lambda k=key: self.move(k)).pack(side="right", padx=2)
+            Btn(bar, text=f"→ {label}", command=lambda k=key: self.move(k)).pack(side="right", padx=2)
         fr, self.tree = make_tree(lc.inner, [("level", "Level", 85), ("biz", "Business", 230),
                                              ("email", "Email", 200), ("status", "Status", 110),
                                              ("step", "Emails sent", 85), ("last", "Last contact", 120),
@@ -2199,7 +2396,7 @@ class CoveragePage(Page):
         top.pack(fill="x")
         self.sumlbl = tk.Label(top.inner, bg=CARD, font=F(10), anchor="w")
         self.sumlbl.pack(side="left")
-        ttk.Button(top.inner, text="Allow searching selected again", command=self.clear).pack(side="right")
+        Btn(top.inner, text="Allow searching selected again", command=self.clear).pack(side="right")
         lc = card(self.body, pad=10)
         lc.pack(fill="both", expand=True, pady=(12, 0))
         f = tk.Frame(lc.inner, bg=CARD)
@@ -2287,7 +2484,7 @@ class SettingsPage(Page):
         cb = ttk.Combobox(f, textvariable=self.provider, values=list(O.PROVIDERS), state="readonly", width=32)
         cb.grid(row=1, column=1, sticky="w")
         cb.bind("<<ComboboxSelected>>", self.pick_provider)
-        ttk.Button(f, text="Detect from my email address", command=self.detect).grid(
+        Btn(f, text="Detect from my email address", command=self.detect).grid(
             row=1, column=2, sticky="w", padx=8)
         r = 2
         for key, label, w in (("email", "Email address", 34), ("smtp_host", "SMTP server", 34),
@@ -2305,8 +2502,8 @@ class SettingsPage(Page):
         r += 1
         bf = tk.Frame(f, bg=CARD)
         bf.grid(row=r, column=1, sticky="w", pady=(14, 0))
-        ttk.Button(bf, text="Save", style="Primary.TButton", command=self.save_email).pack(side="left")
-        ttk.Button(bf, text="Save + send me a test email", command=self.test_email).pack(side="left", padx=8)
+        Btn(bf, text="Save", style="Primary.TButton", command=self.save_email).pack(side="left")
+        Btn(bf, text="Save + send me a test email", command=self.test_email).pack(side="left", padx=8)
 
         # --- your details
         t2 = tk.Frame(nb, bg=CARD)
@@ -2342,7 +2539,7 @@ class SettingsPage(Page):
         tk.Label(f, text="Follow-up days", bg=CARD).grid(row=r + 2, column=0, sticky="w", pady=4)
         self.vars["followup_days"] = tk.StringVar()
         ttk.Entry(f, textvariable=self.vars["followup_days"], width=14).grid(row=r + 2, column=1, sticky="w")
-        ttk.Button(f, text="Save", style="Primary.TButton", command=self.save_details).grid(
+        Btn(f, text="Save", style="Primary.TButton", command=self.save_details).grid(
             row=r + 3, column=1, sticky="w", pady=(14, 0))
 
         # --- AI & audit
@@ -2365,13 +2562,47 @@ class SettingsPage(Page):
         self.ai_state.grid(row=4, column=1, sticky="w", pady=(6, 0))
         bf = tk.Frame(f, bg=CARD)
         bf.grid(row=5, column=1, sticky="w", pady=(12, 0))
-        ttk.Button(bf, text="Save", style="Primary.TButton", command=self.save_ai).pack(side="left")
-        ttk.Button(bf, text="Save + test Gemini", command=self.test_ai).pack(side="left", padx=8)
+        Btn(bf, text="Save", style="Primary.TButton", command=self.save_ai).pack(side="left")
+        Btn(bf, text="Save + test Gemini", command=self.test_ai).pack(side="left", padx=8)
         ttk.Separator(f).grid(row=6, column=0, columnspan=3, sticky="ew", pady=18)
         tk.Label(f, text="Inbox health: checks your sending domain's SPF, DKIM and DMARC records, which "
                  "decide whether your emails land in the inbox or spam.", bg=CARD, fg=MUTED, font=F(9),
                  wraplength=620, justify="left").grid(row=7, column=0, columnspan=3, sticky="w")
-        ttk.Button(f, text="Check my sending domain", command=self.check_domain).grid(row=8, column=0, sticky="w", pady=8)
+        Btn(f, text="Check my sending domain", command=self.check_domain).grid(row=8, column=0, sticky="w", pady=8)
+
+        # --- email content (branding)
+        t7 = tk.Frame(nb, bg=CARD)
+        nb.add(t7, text="  Email design  ")
+        f = tk.Frame(t7, bg=CARD)
+        f.pack(anchor="nw", padx=24, pady=20, fill="x")
+        tk.Label(f, text="Follow-ups and answers use your branded design (logo bar, red 'Book a free 15-minute "
+                 "call' button, a client review and your proof line). The first email stays plain because it "
+                 "looks personal and lands in the inbox more often.", bg=CARD, fg=MUTED, font=F(9),
+                 wraplength=760, justify="left").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 12))
+        self.ed = {k: tk.StringVar() for k in ("proof_line", "portfolio_url", "offer", "offer_until")}
+        for i, (key, label) in enumerate((("proof_line", "Proof line"), ("portfolio_url", "Portfolio link"),
+                                          ("offer", "Current offer"), ("offer_until", "Offer ends (YYYY-MM-DD)"))):
+            tk.Label(f, text=label, bg=CARD).grid(row=i + 1, column=0, sticky="w", pady=4)
+            ttk.Entry(f, textvariable=self.ed[key], width=70).grid(row=i + 1, column=1, sticky="w")
+        tk.Label(f, text="The offer line is added to follow-ups until the end date, then disappears by itself.",
+                 bg=CARD, fg=MUTED, font=F(8)).grid(row=5, column=1, sticky="w")
+        tk.Label(f, text="Client reviews\n(one per line:\nquote | name)", bg=CARD, justify="left").grid(
+            row=6, column=0, sticky="nw", pady=(10, 0))
+        self.testi = tk.Text(f, width=70, height=5, font=F(9), relief="flat", highlightthickness=1,
+                             highlightbackground=BORDER, wrap="word")
+        self.testi.grid(row=6, column=1, sticky="w", pady=(10, 0))
+        tk.Label(f, text="Branded design for", bg=CARD).grid(row=7, column=0, sticky="w", pady=(12, 0))
+        bf = tk.Frame(f, bg=CARD)
+        bf.grid(row=7, column=1, sticky="w", pady=(12, 0))
+        self.brand_vars = {}
+        for step, lab in ((1, "First email"), (2, "Follow-up 1"), (3, "Follow-up 2"), (4, "Last email"),
+                          (5, "Check-back"), (0, "Answers to replies")):
+            v = self.brand_vars[step] = tk.BooleanVar()
+            ttk.Checkbutton(bf, text=lab, variable=v).pack(side="left", padx=(0, 10))
+        bb = tk.Frame(f, bg=CARD)
+        bb.grid(row=8, column=1, sticky="w", pady=(14, 0))
+        Btn(bb, text="Save", style="Primary.TButton", command=self.save_design).pack(side="left")
+        Btn(bb, text="👁  Preview a follow-up", command=self.preview_design).pack(side="left", padx=8)
 
         # --- templates
         t3 = tk.Frame(nb, bg=CARD)
@@ -2394,8 +2625,8 @@ class SettingsPage(Page):
         self.tbody.pack(fill="both", expand=True, pady=8)
         b = tk.Frame(f, bg=CARD)
         b.pack(fill="x")
-        ttk.Button(b, text="Save template", style="Primary.TButton", command=self.save_tpl).pack(side="left")
-        ttk.Button(b, text="Reset to default", command=self.reset_tpl).pack(side="left", padx=8)
+        Btn(b, text="Save template", style="Primary.TButton", command=self.save_tpl).pack(side="left")
+        Btn(b, text="Reset to default", command=self.reset_tpl).pack(side="left", padx=8)
 
         # --- never contact
         t4 = tk.Frame(nb, bg=CARD)
@@ -2408,8 +2639,8 @@ class SettingsPage(Page):
         row.pack(fill="x", pady=8)
         self.supp_in = tk.StringVar()
         ttk.Entry(row, textvariable=self.supp_in, width=40).pack(side="left")
-        ttk.Button(row, text="Add as client", command=lambda: self.add_supp("client")).pack(side="left", padx=6)
-        ttk.Button(row, text="Remove selected", command=self.del_supp).pack(side="left")
+        Btn(row, text="Add as client", command=lambda: self.add_supp("client")).pack(side="left", padx=6)
+        Btn(row, text="Remove selected", command=self.del_supp).pack(side="left")
         fr, self.supp = make_tree(f, [("v", "Email / domain", 300), ("why", "Reason", 160),
                                       ("when", "Added", 150)], height=14)
         fr.pack(fill="both", expand=True)
@@ -2424,7 +2655,7 @@ class SettingsPage(Page):
                                         ("New password again", self.new2))):
             tk.Label(f, text=lab, bg=CARD).grid(row=i, column=0, sticky="w", pady=4)
             ttk.Entry(f, textvariable=var, show="•", width=30).grid(row=i, column=1, sticky="w")
-        ttk.Button(f, text="Change password", style="Primary.TButton", command=self.change_pw).grid(
+        Btn(f, text="Change password", style="Primary.TButton", command=self.change_pw).grid(
             row=3, column=1, sticky="w", pady=(12, 0))
         tk.Label(f, text="Your app password is never stored, only a secure hash. Your email app "
                  "password is encrypted with it.\nForgot it? Delete config.json next to the app: "
@@ -2450,6 +2681,12 @@ class SettingsPage(Page):
         self.ai_state.config(text=f"Gemini key: {'saved (encrypted)' if g else 'not set'}   ·   "
                                   f"PageSpeed key: {'saved (encrypted)' if p else 'not set (optional)'}",
                              fg=GREEN if g else MUTED)
+        for k, v in self.ed.items():
+            v.set(str(s.get(k) or ""))
+        self.testi.delete("1.0", "end")
+        self.testi.insert("1.0", "\n".join(f"{q} | {n}" for q, n in (s.get("testimonials") or [])))
+        for step, v in self.brand_vars.items():
+            v.set(step in (s.get("branded_steps") or []))
         self.load_tpl()
         self.fill_supp()
 
@@ -2553,6 +2790,37 @@ class SettingsPage(Page):
             s["delay_max"] = s["delay_min"]
         self.app.cfg.save()
         self.app.toast("Saved")
+
+    def save_design(self, quiet=False):
+        s = dict(self.app.cfg.get("outreach", {}))
+        for k, v in self.ed.items():
+            s[k] = v.get().strip()
+        if s["offer_until"]:
+            try:
+                dt.date.fromisoformat(s["offer_until"])
+            except ValueError:
+                return messagebox.showerror("Email design", "Offer end date must look like 2026-12-01.")
+        tl = []
+        for line in self.testi.get("1.0", "end").splitlines():
+            if line.strip():
+                q, _, n = line.partition("|")
+                tl.append([q.strip().strip('"“”'), n.strip() or "Client"])
+        s["testimonials"] = tl
+        s["branded_steps"] = [k for k, v in self.brand_vars.items() if v.get()]
+        self.app.cfg.set("outreach", s)
+        self.app.cfg.save()
+        if not quiet:
+            self.app.toast("Saved")
+
+    def preview_design(self):
+        self.save_design(quiet=True)
+        st = O.settings(self.app.cfg)
+        lead = next(iter(self.db.lead_records()), {"domain": "example.com", "name": "Bright Smile Dental",
+                                                    "final_url": "https://example.com", "category": "dentist"})
+        subj, body = O.templates(self.app.cfg)[3]
+        msg = {"step": 3, "domain": lead["domain"], "to_addr": O.best_email(lead) or "owner@example.com",
+               "subject": O._fill(subj, lead, st), "body": O._fill(body, lead, st) + O._fill(O.FOOTER, lead, st)}
+        open_url("file:///" + O.preview_file(self.app.cfg, msg).replace(os.sep, "/"))
 
     def load_tpl(self):
         subj, body = O.templates(self.app.cfg)[self.tstep.get()]
