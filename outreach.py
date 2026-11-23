@@ -893,6 +893,25 @@ def send_approved(db: W.DB, cfg) -> int:
 # ---------------------------------------------------------------------------
 # Inbox check: replies, unsubscribes, bounces
 # ---------------------------------------------------------------------------
+AUTO_SUBJECT_RE = re.compile(r"out of (the )?office|automatic reply|auto.?reply|autoreply|auto.?response|"
+                             r"away from (the )?office|on vacation|on leave|thank you for (your )?(email|"
+                             r"message|contacting)|we (have )?received your (email|message)", re.I)
+
+
+def is_auto_reply(raw: bytes) -> bool:
+    """Out-of-office and 'thanks, we got your message' robots are not real replies."""
+    import email as _email
+    msg = _email.message_from_bytes(raw)
+    auto = (msg.get("Auto-Submitted") or "").lower()
+    if auto and auto != "no":
+        return True
+    if msg.get("X-Autoreply") or msg.get("X-Autorespond") or msg.get("X-Auto-Response-Suppress", "").lower() in ("all", "oof"):
+        return True
+    if (msg.get("Precedence") or "").lower() in ("auto_reply", "bulk", "junk"):
+        return True
+    return bool(AUTO_SUBJECT_RE.search(msg.get("Subject", "") or ""))
+
+
 def _message_text(raw: bytes) -> tuple[str, str, str]:
     """(from address, subject, plain text) from a raw email."""
     import email as _email
@@ -959,8 +978,19 @@ def check_inbox(db: W.DB, cfg, days: int = 30) -> dict:
                 typ, data = im.search(None, "SINCE", since, "FROM", f'"{who}"')
                 if typ == "OK" and data and data[0]:
                     ids.update(data[0].split())
+            # Replies from a different address (e.g. the owner's Gmail) still answer our email thread.
+            for (sent_id,) in db.q("SELECT msgid FROM messages WHERE domain=? AND msgid IS NOT NULL", (domain,)):
+                typ, data = im.search(None, "SINCE", since, "HEADER", "In-Reply-To", sent_id)
+                if typ == "OK" and data and data[0]:
+                    ids.update(data[0].split())
             for mid in sorted(ids, key=int)[-3:]:
-                frm, subject, text = _message_text(_fetch(im, mid))
+                raw = _fetch(im, mid)
+                frm, subject, text = _message_text(raw)
+                if frm == (s.get("email") or "").lower():
+                    continue            # our own sent copy
+                if is_auto_reply(raw):
+                    W.log(f"  Auto-reply from {domain} ignored (out of office / robot).")
+                    continue
                 snippet = text[:3000]
                 if db.q("SELECT 1 FROM replies WHERE domain=? AND subject=? AND snippet=?",
                         (domain, subject, snippet)):

@@ -67,7 +67,7 @@ if getattr(sys, "frozen", False):          # running as WixLeadBot.exe
 else:
     HERE = os.path.dirname(os.path.abspath(__file__))
     BUNDLED = HERE
-VERSION = "1.7.1"
+VERSION = "1.7.2"
 # GitHub "owner/repo" whose Releases hold new versions of WixLeadBot.exe
 UPDATE_REPO = "awaisashraf1996/wix-lead-bot"
 
