@@ -2,7 +2,7 @@
 /**
  * Plugin Name: NA Lead Bot Bridge
  * Description: Connects Wix Lead Bot to this site: private audit pages for leads (with view alerts), website inquiries, portfolio and testimonials, the announcement offer, and draft projects for won clients.
- * Version: 1.0.0
+ * Version: 1.0.1
  * Author: NA Developers
  * Requires at least: 5.6
  * Requires PHP: 7.4
@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
 	exit;
 }
 
-define('NALB_VERSION', '1.0.0');
+define('NALB_VERSION', '1.0.1');
 define('NALB_DIR', plugin_dir_path(__FILE__));
 
 /* --------------------------------------------------------------------------
@@ -130,6 +130,26 @@ add_action('manage_na_audit_posts_custom_column', function ($col, $id) {
 /* --------------------------------------------------------------------------
  * REST API for the app (signs in with a WordPress Application Password)
  * ------------------------------------------------------------------------ */
+
+// Many hosts (LiteSpeed, CGI/FastCGI PHP) drop the standard "Authorization" header,
+// so the app also sends the same Application Password in "X-NALB-Auth".
+add_filter('determine_current_user', function ($user_id) {
+	if ($user_id || empty($_SERVER['HTTP_X_NALB_AUTH'])) {
+		return $user_id;
+	}
+	$pair = base64_decode((string) $_SERVER['HTTP_X_NALB_AUTH'], true);
+	if (!$pair || strpos($pair, ':') === false) {
+		return $user_id;
+	}
+	list($login, $pass) = explode(':', $pair, 2);
+	$force = function () {
+		return true;
+	};
+	add_filter('application_password_is_api_request', $force);
+	$user = wp_authenticate_application_password(null, $login, $pass);
+	remove_filter('application_password_is_api_request', $force);
+	return ($user instanceof WP_User) ? $user->ID : $user_id;
+}, 30);
 function nalb_can() {
 	return current_user_can('edit_posts');
 }

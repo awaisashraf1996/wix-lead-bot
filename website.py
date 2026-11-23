@@ -63,12 +63,21 @@ def _call(cfg, method: str, path: str, payload=None, params=None, timeout: int =
     auth = (s["user"], _password(cfg).replace(" ", ""))
     try:
         r = requests.request(method, base + "/", params=p, json=payload, auth=auth, timeout=timeout,
-                             headers={"User-Agent": "WixLeadBot/" + W.VERSION})
+                             headers={"User-Agent": "WixLeadBot/" + W.VERSION,
+                                      # many hosts drop "Authorization"; the plugin also reads this one
+                                      "X-NALB-Auth": base64.b64encode(f"{auth[0]}:{auth[1]}".encode()).decode()})
     except requests.RequestException as e:
         raise RuntimeError(f"Couldn't reach {base}: {e}") from None
     if r.status_code in (401, 403):
-        raise RuntimeError("The website refused the sign-in. Check the username and Application Password "
-                           "in Settings > Website.")
+        try:
+            code = r.json().get("code", "")
+        except ValueError:
+            code = ""
+        if code in ("incorrect_password", "invalid_username", "invalid_email"):
+            raise RuntimeError("Wrong username or Application Password. In WordPress the username is the one "
+                               "shown top-right ('Howdy, admin' means admin). Paste the password again.")
+        raise RuntimeError("The website didn't accept the sign-in. Update the NA Lead Bot Bridge plugin to "
+                           "1.0.1 (Plugins > Add New > Upload, then 'Replace current with uploaded').")
     if r.status_code == 404:
         raise RuntimeError("The NA Lead Bot Bridge plugin isn't active on the website.")
     if r.status_code >= 400:
