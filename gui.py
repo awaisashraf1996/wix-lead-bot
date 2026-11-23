@@ -2218,7 +2218,7 @@ class OutreachPage(Page):
             return
         self.save(quiet=True)
         m = next((x for x in O.messages(self.db) if x["id"] == self.cur["id"]), self.cur)
-        open_url("file:///" + O.preview_file(self.app.cfg, m).replace(os.sep, "/"))
+        open_url("file:///" + O.preview_file(self.app.cfg, m, self.db).replace(os.sep, "/"))
 
     def attach(self):
         if not self.cur or self.cur["status"] not in ("draft", "approved", "failed"):
@@ -2575,32 +2575,34 @@ class SettingsPage(Page):
         nb.add(t7, text="  Email design  ")
         f = tk.Frame(t7, bg=CARD)
         f.pack(anchor="nw", padx=24, pady=20, fill="x")
-        tk.Label(f, text="Follow-ups and answers use your branded design (logo bar, red 'Book a free 15-minute "
-                 "call' button, a client review and your proof line). The first email stays plain because it "
-                 "looks personal and lands in the inbox more often.", bg=CARD, fg=MUTED, font=F(9),
+        tk.Label(f, text="Every email gets a designed version: the first one is light and personal (your logo, "
+                 "a 'what I noticed' card for their site, a call button, your signature card). Follow-ups add a "
+                 "logo header, recent work, a client review and your offer. Answers to replies stay short.", bg=CARD, fg=MUTED, font=F(9),
                  wraplength=760, justify="left").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 12))
-        self.ed = {k: tk.StringVar() for k in ("proof_line", "portfolio_url", "offer", "offer_until")}
+        self.ed = {k: tk.StringVar() for k in ("proof_line", "portfolio_url", "offer", "offer_until",
+                                               "job_title", "whatsapp")}
         for i, (key, label) in enumerate((("proof_line", "Proof line"), ("portfolio_url", "Portfolio link"),
-                                          ("offer", "Current offer"), ("offer_until", "Offer ends (YYYY-MM-DD)"))):
+                                          ("offer", "Current offer"), ("offer_until", "Offer ends (YYYY-MM-DD)"),
+                                          ("job_title", "Your title"), ("whatsapp", "WhatsApp (blank = hide)"))):
             tk.Label(f, text=label, bg=CARD).grid(row=i + 1, column=0, sticky="w", pady=4)
             ttk.Entry(f, textvariable=self.ed[key], width=70).grid(row=i + 1, column=1, sticky="w")
         tk.Label(f, text="The offer line is added to follow-ups until the end date, then disappears by itself.",
-                 bg=CARD, fg=MUTED, font=F(8)).grid(row=5, column=1, sticky="w")
+                 bg=CARD, fg=MUTED, font=F(8)).grid(row=7, column=1, sticky="w")
         tk.Label(f, text="Client reviews\n(one per line:\nquote | name)", bg=CARD, justify="left").grid(
-            row=6, column=0, sticky="nw", pady=(10, 0))
+            row=8, column=0, sticky="nw", pady=(10, 0))
         self.testi = tk.Text(f, width=70, height=5, font=F(9), relief="flat", highlightthickness=1,
                              highlightbackground=BORDER, wrap="word")
-        self.testi.grid(row=6, column=1, sticky="w", pady=(10, 0))
-        tk.Label(f, text="Branded design for", bg=CARD).grid(row=7, column=0, sticky="w", pady=(12, 0))
+        self.testi.grid(row=8, column=1, sticky="w", pady=(10, 0))
+        tk.Label(f, text="Branded design for", bg=CARD).grid(row=9, column=0, sticky="w", pady=(12, 0))
         bf = tk.Frame(f, bg=CARD)
-        bf.grid(row=7, column=1, sticky="w", pady=(12, 0))
+        bf.grid(row=9, column=1, sticky="w", pady=(12, 0))
         self.brand_vars = {}
         for step, lab in ((1, "First email"), (2, "Follow-up 1"), (3, "Follow-up 2"), (4, "Last email"),
                           (5, "Check-back"), (0, "Answers to replies")):
             v = self.brand_vars[step] = tk.BooleanVar()
             ttk.Checkbutton(bf, text=lab, variable=v).pack(side="left", padx=(0, 10))
         bb = tk.Frame(f, bg=CARD)
-        bb.grid(row=8, column=1, sticky="w", pady=(14, 0))
+        bb.grid(row=10, column=1, sticky="w", pady=(14, 0))
         Btn(bb, text="Save", style="Primary.TButton", command=self.save_design).pack(side="left")
         Btn(bb, text="👁  Preview a follow-up", command=self.preview_design).pack(side="left", padx=8)
 
@@ -2820,7 +2822,7 @@ class SettingsPage(Page):
         subj, body = O.templates(self.app.cfg)[3]
         msg = {"step": 3, "domain": lead["domain"], "to_addr": O.best_email(lead) or "owner@example.com",
                "subject": O._fill(subj, lead, st), "body": O._fill(body, lead, st) + O._fill(O.FOOTER, lead, st)}
-        open_url("file:///" + O.preview_file(self.app.cfg, msg).replace(os.sep, "/"))
+        open_url("file:///" + O.preview_file(self.app.cfg, msg, self.db).replace(os.sep, "/"))
 
     def load_tpl(self):
         subj, body = O.templates(self.app.cfg)[self.tstep.get()]

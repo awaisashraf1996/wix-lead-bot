@@ -64,6 +64,8 @@ DEFAULTS = {
     "delay_min": 60, "delay_max": 150,
     "business_hours_only": True,
     "followup_days": [3, 7, 14],
+    "job_title": "Founder",
+    "whatsapp": "+92 315 5444281",
     "proof_line": "Wix Legend Partner · About 2,000 projects in 8 years · 24/7 support · Fixed written quote",
     "portfolio_url": "https://nadevelopers.com/portfolio",
     "offer": "Black Friday: free logo design with every new website order until December 1.",
@@ -125,9 +127,10 @@ DEFAULT_TESTIMONIALS = [
     ["Prompt, patient and did an excellent job on my website redesign.", "Renea, redesign client"],
     ["He took all of my requests, answered all of my questions, and really delivered a solid product.", "Fallacious Nature, website client"],
 ]
-# Emails that get the branded design (0 = your answers to replies). The first
-# email stays plain because it looks personal and lands in the inbox more often.
-BRANDED_STEPS = [0, 2, 3, 4, 5]
+# Emails that get the designed HTML version (0 = your answers to replies). The
+# first email uses a lighter, personal layout.
+BRANDED_STEPS = [0, 1, 2, 3, 4, 5]
+STEP_LAYOUT = {0: "reply", 1: "first"}      # everything else uses the "followup" layout
 DEFAULTS["testimonials"] = DEFAULT_TESTIMONIALS
 DEFAULTS["branded_steps"] = BRANDED_STEPS
 
@@ -625,7 +628,24 @@ def _smtp(cfg):
     return srv
 
 
-def build_message(cfg, msg: dict, thread_msgid: str | None) -> EmailMessage:
+def design_extras(db, domain: str) -> dict:
+    """Site address + phone speed score for the first email's snapshot card."""
+    out = {}
+    try:
+        r = db.q("SELECT final_url FROM sites WHERE domain=?", (domain,))
+        if r and r[0][0]:
+            out["_site"] = r[0][0]
+        import audit as A
+        a = A.get(db, domain)
+        perf = (a or {}).get("psi", {}).get("scores", {}).get("performance")
+        if perf is not None:
+            out["_speed"] = perf
+    except Exception:
+        pass
+    return out
+
+
+def build_message(cfg, msg: dict, thread_msgid: str | None, extras: dict | None = None) -> EmailMessage:
     s = settings(cfg)
     m = EmailMessage()
     m["From"] = email.utils.formataddr((f"{s['sender_name']} at {s['company']}", s["email"]))
@@ -641,8 +661,9 @@ def build_message(cfg, msg: dict, thread_msgid: str | None) -> EmailMessage:
     m.set_content(msg["body"])
     if msg.get("step") in (s.get("branded_steps") or []):
         import email_design
-        m.add_alternative(email_design.to_html(msg["body"], s, testimonial_for(msg.get("domain", ""), s)),
-                          subtype="html")
+        sd = dict(s, **(extras or {}))
+        m.add_alternative(email_design.to_html(msg["body"], sd, testimonial_for(msg.get("domain", ""), s),
+                                               STEP_LAYOUT.get(msg.get("step"), "followup")), subtype="html")
     import json as _json
     import mimetypes
     import os
@@ -656,7 +677,7 @@ def build_message(cfg, msg: dict, thread_msgid: str | None) -> EmailMessage:
     return m
 
 
-def preview_file(cfg, msg: dict) -> str:
+def preview_file(cfg, msg: dict, db=None) -> str:
     """Write an HTML preview of how the email will look and return its path."""
     import email_design
     import html as _h
@@ -666,14 +687,16 @@ def preview_file(cfg, msg: dict) -> str:
             f"<b>To:</b> {_h.escape(msg.get('to_addr', ''))}<br><b>Subject:</b> {_h.escape(msg.get('subject', ''))}"
             f"</div>")
     if msg.get("step") in (s.get("branded_steps") or []):
-        page = email_design.to_html(msg["body"], s, testimonial_for(msg.get("domain", ""), s))
+        sd = dict(s, **(design_extras(db, msg.get("domain", "")) if db else {}))
+        page = email_design.to_html(msg["body"], sd, testimonial_for(msg.get("domain", ""), s),
+                                    STEP_LAYOUT.get(msg.get("step"), "followup"))
         page = page.replace('<body style="margin:0;padding:0;background:#F3F5F8">',
                             '<body style="margin:0;padding:0;background:#F3F5F8">' + head, 1)
     else:
         page = ("<html><head><meta charset='utf-8'></head><body style='background:#F3F5F8;padding:8px'>" + head +
                 "<div style='max-width:600px;margin:auto;background:#fff;padding:24px 28px;border-radius:10px;"
                 "font:15px/1.6 Segoe UI,Arial;color:#16212D'><div style='color:#6B7785;font-size:12px;"
-                "margin-bottom:10px'>Plain email: looks personal, best for the first contact</div>" +
+                "margin-bottom:10px'>Plain text only (design is switched off for this email)</div>" +
                 _h.escape(msg["body"]).replace("\n", "<br>") + "</div></body></html>")
     path = os.path.join(W.HERE, "output", "email-preview.html")
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -763,7 +786,8 @@ def send_approved(db: W.DB, cfg) -> int:
             try:
                 if srv is None:
                     srv = _smtp(cfg)
-                em = build_message(cfg, msg, st.get("thread_msgid") if msg["step"] > 1 else None)
+                em = build_message(cfg, msg, st.get("thread_msgid") if msg["step"] > 1 else None,
+                                   design_extras(db, msg["domain"]))
                 srv.send_message(em)
             except (smtplib.SMTPException, OSError) as e:
                 update_message(db, msg["id"], status="failed", error=str(e)[:300])
