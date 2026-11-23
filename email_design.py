@@ -259,6 +259,16 @@ def _quote(t) -> str:
             f'<div style="font-size:12px;color:{P["muted"]}">{html.escape(t[1])}</div></td></tr></table>')
 
 
+def _add_bgcolor(h: str) -> str:
+    """Repeat each inline background colour as a bgcolor attribute, which some
+    email programs keep when they strip styles."""
+    def fix(m):
+        tag = m.group(0)
+        c = re.search(r'background:(#[0-9A-Fa-f]{3,6})', tag)
+        return tag[:-1] + f' bgcolor="{c.group(1)}">' if c and "bgcolor" not in tag else tag
+    return re.sub(r'<(td|table|body)\b[^>]*>', fix, h)
+
+
 def to_html(body: str, s: dict, testimonial=None, kind: str = "followup", theme: str | None = None) -> str:
     theme = theme or s.get("email_theme") or "light"
     P.clear()
@@ -282,7 +292,7 @@ def to_html(body: str, s: dict, testimonial=None, kind: str = "followup", theme:
                f'alt="NA Developers" style="display:block;border:0;height:auto"></td></tr>'
                f'<tr><td style="height:4px;background:{TEAL};line-height:4px;font-size:0">&nbsp;</td></tr>')
         extra = _button(s) + ((_work(s) + _quote(testimonial)) if kind == "followup" else "")
-    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+    return _add_bgcolor(f"""<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <meta name="color-scheme" content="{P["scheme"]}"></head><body style="margin:0;padding:0;background:{P["page"]}">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{P["page"]};padding:28px 10px">
 <tr><td align="center">
@@ -294,4 +304,4 @@ def to_html(body: str, s: dict, testimonial=None, kind: str = "followup", theme:
 {partners}
 <tr><td style="padding:16px 30px;background:{P["foot"]};border-top:1px solid {P["line"]};border-radius:0 0 12px 12px;font-size:12px;line-height:1.6;color:{P["muted"]}">
 <b style="color:{P["txt"]}">{proof}</b><br>{foot}</td></tr>
-</table></td></tr></table></body></html>"""
+</table></td></tr></table></body></html>""")
