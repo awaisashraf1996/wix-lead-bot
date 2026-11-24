@@ -140,7 +140,8 @@ def setup_style(root: tk.Tk) -> None:
         st.configure(f"{name}.Horizontal.TProgressbar", background=col, troughcolor="#2A3A4B",
                      bordercolor="#2A3A4B", lightcolor=col, darkcolor=col, thickness=8)
     st.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(0, 0, 0, 0))
-    st.configure("TNotebook.Tab", padding=(16, 8), font=F(10), background=BG, foreground=MUTED,
+    # extra room on the right: on scaled Windows screens the text was cut off
+    st.configure("TNotebook.Tab", padding=(14, 8, 24, 8), font=F(10), background=BG, foreground=MUTED,
                  bordercolor=BORDER)
     st.map("TNotebook.Tab", background=[("selected", CARD)], foreground=[("selected", TEXT)])
     for w in ("TEntry", "TCombobox", "TSpinbox"):
@@ -881,6 +882,8 @@ class App:
             self.pb_all.config(value=100 if not stopped else self.pb_all.cget("value"))
             self.job_pct.config(text="" if stopped else "100%")
             self.job_title.config(text=f"{kind} — {'stopped' if stopped else 'finished'}")
+            if self.job_detail.cget("text") == "Starting…":
+                self.job_detail.config(text="Done." if not stopped else "Stopped.")
             self.toast(f"{kind} {'stopped' if stopped else 'finished'}",
                        AMBER if stopped else GREEN)
         if getattr(self, "job_after", None):
