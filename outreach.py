@@ -65,6 +65,7 @@ DEFAULTS = {
     "business_hours_only": True,
     "followup_days": [3, 7, 14],
     "job_title": "Founder",
+    "autopilot": False,
     "email_theme": "light",
     "whatsapp": "+92 315 5444281",
     "proof_line": "Wix Legend Partner · About 2,000 projects in 8 years · 24/7 support · Fixed written quote",
@@ -379,7 +380,7 @@ def ai_draft_many(db: W.DB, cfg, levels=("super", "hot"), limit: int = 25, psi_k
     n = 0
     for i, lead in enumerate(todo):
         W.wait_if_paused()
-        if W.STOP.is_set():
+        if W.send_stopped():
             break
         W.progress(phase="ai", done=i, total=len(todo),
                    label=f"Audit + Gemini email: {lead.get('name') or lead['domain']}")
@@ -403,14 +404,69 @@ def draft_for_level(db: W.DB, cfg, levels=("super", "hot"), limit: int = 50) -> 
     for lead in db.lead_records():
         if n >= limit:
             break
-        if lead["level"] not in levels or not lead.get("emails"):
+        if lead["level"] not in levels or not lead.get("emails") or lead.get("no_solicit"):
             continue
         st = get_outreach(db, lead["domain"])
         if st and st["status"] not in ("new",):
             continue
+        if is_suppressed(db, best_email(lead), lead["domain"]):
+            continue
         if make_draft(db, cfg, lead, 1):
             n += 1
     return n
+
+
+def leads_to_contact(db: W.DB, levels=("super", "hot")) -> int:
+    n = 0
+    for lead in db.lead_records():
+        if lead["level"] in levels and lead.get("emails") and not lead.get("no_solicit"):
+            st = get_outreach(db, lead["domain"])
+            if not st or st["status"] == "new":
+                n += 1
+    return n
+
+
+def contact_today(db: W.DB, cfg, use_ai: bool, approve: bool, psi_key: str = "") -> dict:
+    """One click: write first emails for today's Super + Hot leads (as many as today's
+    sending limit allows), approve them if you said so, and send them slowly."""
+    init(db)
+    s = settings(cfg)
+    already = len(messages(db, "approved"))
+    room = max(0, int(s["daily_limit"]) - sent_today(db) - already)
+    before = {m["id"] for m in messages(db)}
+    if room:
+        W.log(f"\nContacting Super + Hot leads: up to {room} today.")
+        if use_ai:
+            ai_draft_many(db, cfg, limit=room, psi_key=psi_key)
+        else:
+            draft_for_level(db, cfg, limit=room)
+    new = [m for m in messages(db, "draft") if m["id"] not in before and m["step"] == 1]
+    out = {"drafted": len(new), "approved": 0, "sent": 0, "room": room}
+    if not approve:
+        return out
+    for m in new:
+        update_message(db, m["id"], status="approved")
+    out["approved"] = len(new)
+    if W.send_stopped():
+        return out
+    out["sent"] = send_approved(db, cfg)
+    return out
+
+
+def autopilot_day(db: W.DB, cfg, psi_key: str = "") -> dict:
+    """Autopilot (only when you turned it on): today's follow-ups plus the next
+    Super + Hot leads, approved and sent within the daily limit."""
+    import ai
+    s = settings(cfg)
+    fu_before = {m["id"] for m in messages(db)}
+    create_due_followups(db, cfg)
+    for m in messages(db, "draft"):
+        if m["id"] not in fu_before and m["step"] > 1:
+            update_message(db, m["id"], status="approved")
+    res = contact_today(db, cfg, use_ai=ai.enabled(cfg) and s.get("autopilot_ai", True), approve=True,
+                        psi_key=psi_key)
+    db.set_kv("autopilot_last", dt.date.today().isoformat())
+    return res
 
 
 # ---------------------------------------------------------------------------
@@ -835,7 +891,7 @@ def send_approved(db: W.DB, cfg) -> int:
     if s["business_hours_only"]:
         # send to whoever is in business hours right now first; wait for the rest
         ordered, waiting = [], list(queue)
-        while waiting and not W.STOP.is_set():
+        while waiting and not W.send_stopped():
             ready = [m for m in waiting if in_business_hours(region_of.get(m["domain"]))]
             if ready:
                 ordered.append(ready[0])
@@ -846,7 +902,7 @@ def send_approved(db: W.DB, cfg) -> int:
                 W.progress(phase="send", done=0, total=len(queue),
                            label="Waiting for business hours in your leads' time zones")
                 end = time.time() + 60
-                while time.time() < end and not W.STOP.is_set():
+                while time.time() < end and not W.send_stopped():
                     time.sleep(0.5)
         queue = ordered + waiting
     W.log(f"\nSending {len(queue)} approved emails (limit {s['daily_limit']}/day)...")
@@ -855,14 +911,14 @@ def send_approved(db: W.DB, cfg) -> int:
     try:
         for i, msg in enumerate(queue):
             W.wait_if_paused()
-            if W.STOP.is_set():
+            if W.send_stopped():
                 break
             while s["business_hours_only"] and not in_business_hours(region_of.get(msg["domain"])) \
-                    and not W.STOP.is_set():
+                    and not W.send_stopped():
                 W.progress(phase="send", done=i, total=len(queue),
                            label=f"Waiting for business hours where {msg['to_addr']} is")
                 time.sleep(30)
-            if W.STOP.is_set():
+            if W.send_stopped():
                 break
             if is_suppressed(db, msg["to_addr"], msg["domain"]):
                 update_message(db, msg["id"], status="cancelled", error="unsubscribed")
@@ -910,7 +966,7 @@ def send_approved(db: W.DB, cfg) -> int:
             if i < len(queue) - 1:
                 wait = random.uniform(s["delay_min"], s["delay_max"])
                 end = time.time() + wait
-                while time.time() < end and not W.STOP.is_set():
+                while time.time() < end and not W.send_stopped():
                     time.sleep(0.5)
     finally:
         if srv is not None:

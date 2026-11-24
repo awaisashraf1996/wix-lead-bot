@@ -551,12 +551,96 @@ class App:
         self.check_updates()
         O.ON_WON = self._won_to_site
         self.root.after(4000, self.website_tick)
+        self.root.after(90 * 1000, self.autopilot_tick)
         try:
             n = O.create_due_followups(self.db, self.cfg)
             if n:
                 self.toast(f"{n} follow-up email{'s' if n > 1 else ''} ready for your approval")
         except Exception:
             pass
+
+    def contact_dialog(self):
+        """One click: write, approve and send first emails to Super + Hot leads."""
+        s = O.settings(self.cfg)
+        waiting = O.leads_to_contact(self.db)
+        room = max(0, int(s["daily_limit"]) - O.sent_today(self.db) - len(O.messages(self.db, "approved")))
+        win = tk.Toplevel(self.root)
+        win.title("Contact Super + Hot leads")
+        win.configure(bg=CARD)
+        win.transient(self.root)
+        win.grab_set()
+        f = tk.Frame(win, bg=CARD)
+        f.pack(padx=22, pady=18)
+        tk.Label(f, text="Contact Super + Hot leads", bg=CARD, fg=TEXT, font=F(13, "bold")).pack(anchor="w")
+        tk.Label(f, text=(f"{waiting} Super/Hot leads with an email haven't been contacted yet.\n"
+                          f"Today you can send {room} more (daily limit {s['daily_limit']}). The rest go "
+                          "on the next days."), bg=CARD, fg=MUTED, font=F(10),
+                 justify="left").pack(anchor="w", pady=(4, 12))
+        tk.Label(f, text="Who writes the emails?", bg=CARD, fg=TEXT, font=F(10, "bold")).pack(anchor="w")
+        writer = tk.StringVar(value="ai" if ai.enabled(self.cfg) else "tpl")
+        ttk.Radiobutton(f, text="Gemini: a personal email per business from its audit (about 1 min each)",
+                        value="ai", variable=writer,
+                        state="normal" if ai.enabled(self.cfg) else "disabled").pack(anchor="w")
+        ttk.Radiobutton(f, text="Templates: instant, still filled with each business's own problems",
+                        value="tpl", variable=writer).pack(anchor="w", pady=(0, 10))
+        tk.Label(f, text="Checking", bg=CARD, fg=TEXT, font=F(10, "bold")).pack(anchor="w")
+        mode = tk.StringVar(value="check")
+        ttk.Radiobutton(f, text="Show me the emails first; I approve, then they send",
+                        value="check", variable=mode).pack(anchor="w")
+        ttk.Radiobutton(f, text="Approve and send them for me now (slowly, in their business hours)",
+                        value="send", variable=mode).pack(anchor="w")
+        auto = tk.BooleanVar(value=bool(s.get("autopilot")))
+        ttk.Checkbutton(f, text="Autopilot: do this every day until everyone is contacted, and send their "
+                        "follow-ups too (while the app is open)", variable=auto).pack(anchor="w", pady=(10, 0))
+        bb = tk.Frame(f, bg=CARD)
+        bb.pack(fill="x", pady=(16, 0))
+
+        def start():
+            use_ai = writer.get() == "ai"
+            send = mode.get() == "send" or auto.get()
+            out = dict(self.cfg.get("outreach", {}) or {})
+            out["autopilot"] = bool(auto.get())
+            out["autopilot_ai"] = use_ai
+            self.cfg.set("outreach", out)
+            self.cfg.save()
+            on = bool(auto.get())
+            win.destroy()
+            if on:
+                self.db.set_kv("autopilot_last", dt.date.today().isoformat())
+            key = S.get_secret(self.cfg, "psi_key")
+
+            def done(res):
+                if not res:
+                    return
+                if send:
+                    self.toast(f"{res['sent']} sent today." + (" Autopilot continues tomorrow." if on else ""),
+                               GREEN)
+                else:
+                    self.toast(f"{res['drafted']} emails ready. Check them, click Approve all, then Send approved.")
+                    self.show("outreach", view="draft")
+            self.run_job("Contacting leads", lambda: O.contact_today(self.db, self.cfg, use_ai, send, key),
+                         after=done)
+        Btn(bb, text="Start", style="Primary.TButton", command=start).pack(side="right")
+        Btn(bb, text="Cancel", command=win.destroy).pack(side="right", padx=8)
+        if not waiting:
+            tk.Label(f, text="Nothing to do: find more leads first.", bg=CARD, fg=RED,
+                     font=F(9, "bold")).pack(anchor="w")
+        win.update_idletasks()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_width()) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - win.winfo_height()) // 3
+        win.geometry(f"+{max(0, x)}+{max(0, y)}")
+
+    def autopilot_tick(self):
+        """Once a day while the app is open, if you turned Autopilot on."""
+        s = O.settings(self.cfg)
+        today = dt.date.today().isoformat()
+        if (s.get("autopilot") and self.db.get_kv("autopilot_last", "") != today
+                and S.get_secret(self.cfg, "smtp_password")):
+            self.db.set_kv("autopilot_last", today)
+            key = S.get_secret(self.cfg, "psi_key")
+            self.run_job("Autopilot", lambda: O.autopilot_day(self.db, self.cfg, key),
+                         after=lambda r: r and self.toast(f"Autopilot: {r['sent']} emails sent today", GREEN))
+        self.root.after(60 * 60 * 1000, self.autopilot_tick)
 
     def _won_to_site(self, domain):
         if WS.enabled(self.cfg) and WS.settings(self.cfg)["won_projects"]:
@@ -717,8 +801,13 @@ class App:
         self.job_detail = tk.Label(left, text="Pick what to search on the Find leads page.",
                                    bg=NAVY, fg="#AFC0CF", font=F(9), anchor="w")
         self.job_detail.pack(fill="x", pady=(4, 0))
-        self.job_side = tk.Label(left, text="", bg=NAVY, fg="#7FD3E6", font=F(9), anchor="w")
-        self.job_side.pack(fill="x")
+        srow = tk.Frame(left, bg=NAVY)
+        srow.pack(fill="x")
+        self.job_side = tk.Label(srow, text="", bg=NAVY, fg="#7FD3E6", font=F(9), anchor="w")
+        self.job_side.pack(side="left")
+        self.side_stop = tk.Label(srow, text="", bg=NAVY, fg="#FFB4B7", font=F(9, "underline"), cursor="hand2")
+        self.side_stop.pack(side="left", padx=10)
+        self.side_stop.bind("<Button-1>", lambda e: self.stop_sending())
         self.side_jobs = []
         btns = tk.Frame(bar, bg=NAVY)
         btns.pack(side="right", padx=18)
@@ -732,7 +821,12 @@ class App:
 
     SEARCH_JOBS = ("Finding leads", "wixsite.com hunt", "Checking your list", "Checking Yellow Pages websites")
 
+    BACKGROUND_JOBS = ("Sending emails", "Contacting leads", "Autopilot")
+
     def run_job(self, kind: str, fn, after=None):
+        if kind in self.BACKGROUND_JOBS:
+            W.SEND_STOP.clear()
+            return self.run_side(kind, fn, after)     # sending waits for US hours: keep the bar for searches
         if self.job and self.job.is_alive():
             if kind in self.SEARCH_JOBS and self.job_kind in self.SEARCH_JOBS:
                 messagebox.showinfo("Busy", "A search is already running. You can keep using the rest of the "
@@ -779,6 +873,13 @@ class App:
 
     def _side_label(self):
         self.job_side.config(text=("Also running: " + ", ".join(self.side_jobs)) if self.side_jobs else "")
+        sending = any(k in self.BACKGROUND_JOBS for k in self.side_jobs)
+        self.side_stop.config(text="■ Stop sending" if sending else "")
+
+    def stop_sending(self):
+        W.SEND_STOP.set()
+        self.side_stop.config(text="stopping…")
+        self.toast("Sending stops after the current email. Unsent emails stay approved for later.", AMBER)
 
     def side_finished(self, kind, res, err, after):
         if kind in self.side_jobs:
@@ -1170,8 +1271,8 @@ class DashboardPage(Page):
             step, cmd, btn = (f"{c['_drafts']} emails are drafted. Check and approve them.",
                               lambda: self.app.show("outreach"), "Review drafts")
         elif fresh_super:
-            step, cmd, btn = (f"{fresh_super} Super leads haven't been emailed yet. Let Gemini write to them.",
-                              lambda: self.app.show("outreach"), "Write emails")
+            step, cmd, btn = (f"{fresh_super} Super leads haven't been emailed yet. Contact them in one click.",
+                              self.app.contact_dialog, "Contact Super + Hot")
         elif not recs:
             step, cmd, btn = ("Start by finding Wix websites in a state and category.",
                               lambda: self.app.show("find"), "Find leads")
@@ -2329,8 +2430,8 @@ class OutreachPage(Page):
         self.summary.pack(fill="x", pady=(0, 10))
         row = tk.Frame(t, bg=CARD)
         row.pack(fill="x")
-        Btn(row, text="✦  Gemini emails (Super + Hot)", style="Dark.TButton",
-                   command=self.bulk_ai).pack(side="left")
+        Btn(row, text="🚀  Contact Super + Hot", style="Dark.TButton",
+                   command=self.app.contact_dialog).pack(side="left")
         Btn(row, text="Templates", command=self.bulk).pack(side="left", padx=(6, 0))
         Btn(row, text="⟳  Follow-ups", command=self.followups).pack(side="left", padx=6)
         Btn(row, text="↩  Check inbox", command=self.inbox).pack(side="left")
