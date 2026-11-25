@@ -66,6 +66,7 @@ DEFAULTS = {
     "followup_days": [3, 7, 14],
     "job_title": "Founder",
     "autopilot": False,
+    "warmup": True,
     "email_theme": "light",
     "whatsapp": "+92 315 5444281",
     "proof_line": "Wix Legend Partner · About 2,000 projects in 8 years · 24/7 support · Fixed written quote",
@@ -430,9 +431,8 @@ def contact_today(db: W.DB, cfg, use_ai: bool, approve: bool, psi_key: str = "")
     """One click: write first emails for today's Super + Hot leads (as many as today's
     sending limit allows), approve them if you said so, and send them slowly."""
     init(db)
-    s = settings(cfg)
     already = len(messages(db, "approved"))
-    room = max(0, int(s["daily_limit"]) - sent_today(db) - already)
+    room = max(0, daily_limit(db, cfg) - sent_today(db) - already)
     before = {m["id"] for m in messages(db)}
     if room:
         W.log(f"\nContacting Super + Hot leads: up to {room} today.")
@@ -554,6 +554,45 @@ def messages(db: W.DB, status: str | None = None, domain: str | None = None) -> 
 def update_message(db: W.DB, mid: int, **fields) -> None:
     sets = ", ".join(f"{k}=?" for k in fields)
     db.x(f"UPDATE messages SET {sets} WHERE id=?", list(fields.values()) + [mid])
+
+
+WARMUP_START, WARMUP_STEP = 25, 5
+
+
+def bounce_rate(db: W.DB, days: int = 7) -> tuple[float, int]:
+    """Share of emails sent in the last days that bounced, and how many were sent."""
+    init(db)
+    since = (dt.datetime.now() - dt.timedelta(days=days)).isoformat(timespec="seconds")
+    sent = db.q("SELECT COUNT(DISTINCT domain) FROM messages WHERE status='sent' AND sent_at>=?", (since,))[0][0]
+    bounced = db.q("SELECT COUNT(*) FROM outreach WHERE status='bounced' AND updated_at>=?", (since,))[0][0]
+    return (bounced / sent if sent else 0.0), sent
+
+
+def daily_limit(db: W.DB, cfg) -> int:
+    """Today's sending limit. With warm-up on, it starts at 25 and rises by 5 each day
+    you send, up to your 'Emails per day' setting; too many bounces send it back to 25."""
+    s = settings(cfg)
+    target = max(1, int(s["daily_limit"]))
+    if not s.get("warmup", True) or target <= WARMUP_START:
+        return target
+    today = dt.date.today().isoformat()
+    level = int(db.get_kv("warmup_level", "0") or 0) or WARMUP_START
+    if db.get_kv("warmup_date", "") != today:
+        last = db.get_kv("warmup_date", "")
+        if last:
+            had_sends = db.q("SELECT 1 FROM messages WHERE status='sent' AND sent_at LIKE ? LIMIT 1",
+                             (last + "%",))
+            rate, n = bounce_rate(db)
+            if n >= 10 and rate > 0.05:
+                level = WARMUP_START
+                W.log(f"Warm-up: {rate:.0%} of recent emails bounced, so today's limit goes back to "
+                      f"{WARMUP_START}. Clean your list or check Settings > Email account.")
+            elif had_sends:
+                level += WARMUP_STEP
+        db.set_kv("warmup_date", today)
+    level = max(1, min(target, level))
+    db.set_kv("warmup_level", str(level))
+    return level
 
 
 def sent_today(db: W.DB) -> int:
@@ -882,7 +921,8 @@ def send_approved(db: W.DB, cfg) -> int:
     s = settings(cfg)
     W.STOP.clear()
     queue = list(reversed(messages(db, "approved")))
-    room = max(0, int(s["daily_limit"]) - sent_today(db))
+    limit = daily_limit(db, cfg)
+    room = max(0, limit - sent_today(db))
     queue = queue[:room]
     if not queue:
         W.log("Nothing to send (no approved emails, or today's limit is reached).")
@@ -905,7 +945,8 @@ def send_approved(db: W.DB, cfg) -> int:
                 while time.time() < end and not W.send_stopped():
                     time.sleep(0.5)
         queue = ordered + waiting
-    W.log(f"\nSending {len(queue)} approved emails (limit {s['daily_limit']}/day)...")
+    W.log(f"\nSending {len(queue)} approved emails (limit today {limit}"
+          + (f", warming up to {s['daily_limit']}" if limit < int(s['daily_limit']) else "") + ")...")
     sent = 0
     srv = None
     try:

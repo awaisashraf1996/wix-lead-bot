@@ -563,7 +563,8 @@ class App:
         """One click: write, approve and send first emails to Super + Hot leads."""
         s = O.settings(self.cfg)
         waiting = O.leads_to_contact(self.db)
-        room = max(0, int(s["daily_limit"]) - O.sent_today(self.db) - len(O.messages(self.db, "approved")))
+        lim = O.daily_limit(self.db, self.cfg)
+        room = max(0, lim - O.sent_today(self.db) - len(O.messages(self.db, "approved")))
         win = tk.Toplevel(self.root)
         win.title("Contact Super + Hot leads")
         win.configure(bg=CARD)
@@ -573,7 +574,7 @@ class App:
         f.pack(padx=22, pady=18)
         tk.Label(f, text="Contact Super + Hot leads", bg=CARD, fg=TEXT, font=F(13, "bold")).pack(anchor="w")
         tk.Label(f, text=(f"{waiting} Super/Hot leads with an email haven't been contacted yet.\n"
-                          f"Today you can send {room} more (daily limit {s['daily_limit']}). The rest go "
+                          f"Today you can send {room} more (today's limit {lim}{' while warming up to ' + str(s['daily_limit']) if lim < int(s['daily_limit']) else ''}). The rest go "
                           "on the next days."), bg=CARD, fg=MUTED, font=F(10),
                  justify="left").pack(anchor="w", pady=(4, 12))
         tk.Label(f, text="Who writes the emails?", bg=CARD, fg=TEXT, font=F(10, "bold")).pack(anchor="w")
@@ -1256,7 +1257,7 @@ class DashboardPage(Page):
         hour = dt.datetime.now().hour
         part = "morning" if hour < 12 else "afternoon" if hour < 18 else "evening"
         self.hello.config(text=f"Good {part}, {(s.get('sender_name') or 'there').split()[0]}")
-        self.today.config(text=(f"✉  Sent today {c['_sent_today']} of {s['daily_limit']}     "
+        self.today.config(text=(f"✉  Sent today {c['_sent_today']} of {O.daily_limit(db, self.app.cfg)}     "
                                 f"✎  {c['_drafts']} drafts to check     ✓  {c['_approved']} approved     "
                                 f"↩  {c['replied']} replies to answer"))
         status = {d: st for d, st in db.q("SELECT domain, status FROM outreach")}
@@ -2501,7 +2502,7 @@ class OutreachPage(Page):
         hrs = "" if not s["business_hours_only"] else ("   ·   sending now: yes" if O.in_business_hours()
                                                        else "   ·   outside US business hours, approved emails wait")
         self.summary.config(text=f"Drafts: {c['_drafts']}   ·   Approved: {c['_approved']}   ·   "
-                                 f"Sent today: {c['_sent_today']}/{s['daily_limit']}{hrs}")
+                                 f"Sent today: {c['_sent_today']}/{O.daily_limit(self.db, self.app.cfg)}{hrs}")
         problems = []
         if not S.get_secret(self.app.cfg, "smtp_password"):
             problems.append("connect your email account")
@@ -2710,7 +2711,7 @@ class OutreachPage(Page):
         if not c["_approved"]:
             return messagebox.showinfo("Send", "Approve some emails first.")
         s = O.settings(self.app.cfg)
-        if not messagebox.askyesno("Send", f"Send up to {min(c['_approved'], max(0, s['daily_limit'] - c['_sent_today']))} "
+        if not messagebox.askyesno("Send", f"Send up to {min(c['_approved'], max(0, O.daily_limit(self.db, self.app.cfg) - c['_sent_today']))} "
                                    f"approved emails now?\nThey go out slowly, "
                                    f"{s['delay_min']}-{s['delay_max']} seconds apart."):
             return
@@ -3205,7 +3206,10 @@ class SettingsPage(Page):
             v = self.vars[key] = tk.StringVar()
             ttk.Spinbox(f, from_=lo, to=hi, textvariable=v, width=8).grid(row=r, column=1, sticky="w")
             r += 1
-        tk.Label(f, text="", bg=CARD).grid(row=r, column=0)
+        self.warm = tk.BooleanVar(value=True)
+        ttk.Checkbutton(f, text="Warm up: start at 25 a day and add 5 each day up to 'Emails per day' "
+                        "(drops back to 25 if many emails bounce)", variable=self.warm).grid(
+            row=r, column=1, columnspan=2, sticky="w", pady=4)
         self.bh = tk.BooleanVar()
         ttk.Checkbutton(f, text="Only send Mon–Fri, 9am–5pm New York time (better replies)",
                         variable=self.bh).grid(row=r + 1, column=1, sticky="w", pady=4)
@@ -3390,6 +3394,7 @@ class SettingsPage(Page):
         self.addr.delete("1.0", "end")
         self.addr.insert("1.0", s["postal_address"])
         self.bh.set(bool(s["business_hours_only"]))
+        self.warm.set(bool(s.get("warmup", True)))
         has = bool(S.get_secret(self.app.cfg, "smtp_password"))
         self.pwstate.config(text="saved (encrypted)" if has else "not set", fg=GREEN if has else RED)
         self.apppw.set("")
@@ -3546,6 +3551,7 @@ class SettingsPage(Page):
         s = self.app.cfg.get("outreach")
         s["postal_address"] = self.addr.get("1.0", "end").strip()
         s["business_hours_only"] = self.bh.get()
+        s["warmup"] = self.warm.get()
         if s["delay_max"] < s["delay_min"]:
             s["delay_max"] = s["delay_min"]
         self.app.cfg.save()
