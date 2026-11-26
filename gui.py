@@ -3782,6 +3782,9 @@ class SettingsPage(Page):
         self.app.toast("Password changed")
 
 
+_SINGLE = None
+
+
 def main():
     if "--yp-browser" in sys.argv:
         import yp_browser
@@ -3789,6 +3792,22 @@ def main():
         url = sys.argv[i + 1] if len(sys.argv) > i + 1 else "https://www.yellowpages.com"
         sys.exit(yp_browser.run(url, W.BUNDLED, W.HERE))
     os.makedirs(OUT_DIR, exist_ok=True)
+    # Only one copy at a time: two copies could send the same emails twice.
+    import socket
+    global _SINGLE
+    _SINGLE = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+        _SINGLE.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    try:
+        _SINGLE.bind(("127.0.0.1", 47219))
+        _SINGLE.listen(1)
+    except OSError:
+        r = tk.Tk()
+        r.withdraw()
+        messagebox.showinfo("Wix Lead Bot", "Wix Lead Bot is already open. Use the window that's already "
+                            "running (check the taskbar).")
+        r.destroy()
+        sys.exit(0)
     try:
         from ctypes import windll  # sharper text on Windows
         windll.shcore.SetProcessDpiAwareness(1)
