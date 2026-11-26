@@ -62,7 +62,7 @@ DEFAULTS = {
     "postal_address": "",
     "daily_limit": 25,
     "delay_min": 60, "delay_max": 150,
-    "business_hours_only": True,
+    "business_hours_only": False,
     "followup_days": [3, 7, 14],
     "job_title": "Founder",
     "autopilot": False,

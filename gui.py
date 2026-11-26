@@ -549,6 +549,12 @@ class App:
 
     def startup_tasks(self):
         self.check_updates()
+        out = dict(self.cfg.get("outreach", {}) or {})
+        if not out.get("_send_anytime_v1"):          # you asked to email at any time
+            out["business_hours_only"] = False
+            out["_send_anytime_v1"] = True
+            self.cfg.set("outreach", out)
+            self.cfg.save()
         O.ON_WON = self._won_to_site
         self.root.after(4000, self.website_tick)
         self.root.after(90 * 1000, self.autopilot_tick)
