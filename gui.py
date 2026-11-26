@@ -2588,6 +2588,7 @@ class OutreachPage(Page):
         br.pack(fill="x")
         self.btn_approve = Btn(br, text="✓  Approve", style="Primary.TButton", command=self.approve)
         self.btn_approve.pack(side="left")
+        Btn(br, text="📤  Send now", command=self.send_now).pack(side="left", padx=(6, 0))
         Btn(br, text="Save", command=self.save).pack(side="left", padx=6)
         Btn(br, text="Skip", command=lambda: self.set_selected("cancelled")).pack(side="left")
         Btn(br, text="Approve all", command=self.approve_all).pack(side="right")
@@ -2728,6 +2729,22 @@ class OutreachPage(Page):
         self.refresh(select=int(nxt) if nxt else None)
         self.filter.set("draft")
         self.fill(int(nxt) if nxt else None)
+
+    def send_now(self):
+        """Approve this one email and send it straight away, ahead of the queue."""
+        if not self.cur:
+            return
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", self.to.get().strip()):
+            return messagebox.showwarning("Email", "The To address doesn't look right.")
+        if max(0, O.daily_limit(self.db, self.app.cfg) - O.sent_today(self.db)) <= 0:
+            return messagebox.showinfo("Send now", "Today's sending limit is reached. It goes out tomorrow if you approve it.")
+        if not messagebox.askyesno("Send now", f"Send this email to {self.to.get().strip()} now?"):
+            return
+        self.save(quiet=True)
+        mid = self.cur["id"]
+        O.update_message(self.db, mid, status="approved", approved_at=W.now(), error=None)
+        self.app.run_job("Sending emails", lambda: O.send_approved(self.db, self.app.cfg, only_ids=[mid]))
+        self.refresh()
 
     def approve_all(self):
         kids = self.tree.get_children()

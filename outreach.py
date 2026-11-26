@@ -1002,12 +1002,14 @@ def _with_audit_page(db: W.DB, cfg, msg: dict) -> dict:
     return msg
 
 
-def send_approved(db: W.DB, cfg) -> int:
+def send_approved(db: W.DB, cfg, only_ids=None) -> int:
     """Send approved emails, slowly, up to the daily limit. Uses the app's
-    Pause/Stop buttons. Returns how many were sent."""
+    Pause/Stop buttons. only_ids: send just these (Send now). Returns how many were sent."""
     init(db)
     s = settings(cfg)
     queue = list(reversed(messages(db, "approved")))
+    if only_ids:
+        queue = [m for m in queue if m["id"] in set(only_ids)]
     limit = daily_limit(db, cfg)
     room = max(0, limit - sent_today(db))
     queue = queue[:room]
