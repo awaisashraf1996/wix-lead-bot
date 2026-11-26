@@ -558,6 +558,7 @@ class App:
         O.ON_WON = self._won_to_site
         self.root.after(4000, self.website_tick)
         self.root.after(90 * 1000, self.autopilot_tick)
+        self.root.after(30 * 1000, self.marketing_tick)
         try:
             n = O.create_due_followups(self.db, self.cfg)
             if n:
@@ -686,6 +687,29 @@ class App:
                 except Exception as e:
                     self.q.put(("log", f"Couldn't add the project to your website: {e}"))
             threading.Thread(target=go, daemon=True).start()
+
+    def marketing_tick(self):
+        """Older leads were found before ads/pixel detection: check a few at a time in the background."""
+        if not getattr(self, "_mk_running", False):
+            rows = self.db.q("SELECT domain, final_url FROM sites WHERE is_wix=1 AND marketing IS NULL "
+                             "AND final_url IS NOT NULL LIMIT 15")
+            if rows:
+                self._mk_running = True
+
+                def go():
+                    import requests
+                    try:
+                        for dom, url in rows:
+                            try:
+                                r = requests.get(url, timeout=15, headers={"User-Agent": W.USER_AGENT})
+                                found = "; ".join(W.detect_marketing(r.text))
+                            except Exception:
+                                found = ""
+                            self.db.x("UPDATE sites SET marketing=? WHERE domain=?", (found, dom))
+                    finally:
+                        self._mk_running = False
+                threading.Thread(target=go, daemon=True).start()
+        self.root.after(3 * 60 * 1000, self.marketing_tick)
 
     def website_tick(self):
         """Every 5 minutes: who opened their review, new website inquiries."""
@@ -1194,8 +1218,8 @@ class DashboardPage(Page):
         nb.pack(fill="both", expand=True)
         t1 = tk.Frame(nb, bg=CARD)
         nb.add(t1, text=" Best leads ")
-        fr, self.tree = make_tree(t1, [("level", "Level", 70), ("name", "Business", 150),
-                                       ("loc", "Location", 90), ("score", "Score", 45),
+        fr, self.tree = make_tree(t1, [("level", "Level", 85), ("name", "Business", 170),
+                                       ("loc", "Location", 130), ("score", "Score", 60),
                                        ("mk", "Marketing", 110)], height=10)
         fr.pack(fill="both", expand=True, pady=(6, 0))
         self.tree.bind("<Double-1>", lambda e: self.app.open_profile(self.tree.focus()))
@@ -1249,6 +1273,8 @@ class DashboardPage(Page):
                 continue
             x, y = pos[0] * w, pos[1] * h
             rad = 7 + 11 * (n / biggest) ** 0.5
+            x = min(max(x, rad + 2), w - rad - 2)       # keep big circles inside the map
+            y = min(max(y, rad + 2), h - rad - 2)
             col = RED if sup else TEAL
             tag = f"r_{code}"
             cv.create_oval(x - rad, y - rad, x + rad, y + rad, fill=col, outline="white", width=2, tags=(tag,))
@@ -1301,6 +1327,8 @@ class DashboardPage(Page):
                                 f"↩  {c['replied']} replies to answer"))
         status = {d: st for d, st in db.q("SELECT domain, status FROM outreach")}
         fresh = [r for r in recs if status.get(r["domain"], "new") == "new"]
+        rank = {"super": 0, "hot": 1, "normal": 2}
+        fresh.sort(key=lambda r: (rank.get(r["level"], 3), -(r["score"] or 0)))
         fresh_super = sum(r["level"] == "super" for r in fresh)
         nrep = db.q("SELECT COUNT(*) FROM replies r JOIN outreach o ON o.domain=r.domain WHERE r.handled=0"
                     " AND r.kind IN ('interested','question','other') AND o.status IN ('replied','later')")[0][0]
@@ -1334,8 +1362,16 @@ class DashboardPage(Page):
             items.append((f"☎  {nb} call{'s' if nb > 1 else ''} booked, open the call brief",
                           lambda: self.app.show("pipeline"), None))
         names = {r["domain"]: (r["name"] or r["domain"]) for r in recs}
+        who = {}
+        for dom, frm, subj in db.q("SELECT domain, from_addr, subject FROM replies ORDER BY id"):
+            who[dom] = frm or subj
         for tid, dom, kind, due in O.due_tasks(db)[:8]:
-            items.append((f"★  {O.TASK_LABELS.get(kind, kind)}: {names.get(dom, dom)}",
+            label = names.get(dom) or who.get(dom) or dom
+            if kind == "inquiry":
+                cmd = lambda: self.app.show("outreach", view="replies")
+                items.append((f"★  New website inquiry: {label}", cmd, tid))
+                continue
+            items.append((f"★  {O.TASK_LABELS.get(kind, kind)}: {label}",
                           lambda d=dom: self.app.open_profile(d), tid))
         if not items:
             tk.Label(self.todo_box, text="Nothing waiting. Find or email more leads.", bg=CARD, fg=MUTED,

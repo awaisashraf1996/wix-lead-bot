@@ -36,6 +36,9 @@ DEFAULTS = {
     "won_projects": True,     # Won -> draft project on the site
 }
 AUDIT_LINE = "Your free website review is ready: {url}"
+FREE_MAIL = re.compile(r"@(gmail|googlemail|yahoo|ymail|hotmail|outlook|icloud|me|mac|aol|live|msn|proton|"
+                       r"protonmail|pm|zoho|gmx|yandex|mail|inbox|hey|fastmail|tutanota|rocketmail|att|comcast|"
+                       r"verizon|sbcglobal)\.", re.I)
 
 
 def settings(cfg) -> dict:
@@ -247,6 +250,12 @@ def import_inquiries(db: W.DB, cfg) -> int:
     import outreach as O
     O.init(db)
     ai.init(db)
+    if db.get_kv("inq_cleanup_v1", "") != "1":
+        # inquiries from personal mailboxes (proton.me, gmail...) are not company websites
+        for (d,) in db.q("SELECT DISTINCT domain FROM businesses WHERE category='inquiry'"):
+            if d and FREE_MAIL.search("@" + d):
+                db.x("DELETE FROM businesses WHERE category='inquiry' AND domain=?", (d,))
+        db.set_kv("inq_cleanup_v1", "1")
     after = int(db.get_kv("wp_inquiry_after", "0") or 0)
     items = _call(cfg, "GET", "/inquiries", params={"after_id": after})
     n = 0
@@ -254,7 +263,7 @@ def import_inquiries(db: W.DB, cfg) -> int:
         after = max(after, int(it.get("id") or 0))
         email_addr = (it.get("email") or "").strip().lower()
         site = (it.get("website") or "").strip()
-        if not site and email_addr and not re.search(r"@(gmail|yahoo|hotmail|outlook|icloud|aol|live)\.", email_addr):
+        if not site and email_addr and not FREE_MAIL.search(email_addr):
             site = email_addr.split("@")[-1]
         domain = W.domain_of(W.normalise_url(site)) if site else ""
         key = domain or email_addr or f"inquiry-{it.get('id')}"
