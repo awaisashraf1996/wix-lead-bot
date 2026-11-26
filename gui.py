@@ -555,10 +555,18 @@ class App:
             out["_send_anytime_v1"] = True
             self.cfg.set("outreach", out)
             self.cfg.save()
+        if not self.db.get_kv("campaigns_v1", ""):
+            # emails written before campaigns existed: keep them visible as one campaign
+            rows = self.db.q("SELECT id FROM messages WHERE campaign_id IS NULL")
+            if rows:
+                cid = O.new_campaign(self.db, "Earlier emails")
+                O.tag_campaign(self.db, cid, [r[0] for r in rows])
+            self.db.set_kv("campaigns_v1", "1")
         O.ON_WON = self._won_to_site
         self.root.after(4000, self.website_tick)
         self.root.after(90 * 1000, self.autopilot_tick)
         self.root.after(3000, self.badge_tick)
+        self.root.after(2 * 60 * 1000, self.leftovers_tick)
         self.root.after(30 * 1000, self.marketing_tick)
         try:
             n = O.create_due_followups(self.db, self.cfg)
@@ -613,12 +621,16 @@ class App:
                         state="normal" if ai.enabled(self.cfg) else "disabled").pack(anchor="w")
         ttk.Radiobutton(f, text="Templates: instant, still filled with each business's own problems",
                         value="tpl", variable=writer).pack(anchor="w", pady=(0, 10))
-        tk.Label(f, text="Checking", bg=CARD, fg=TEXT, font=F(10, "bold")).pack(anchor="w")
+        tk.Label(f, text="Campaign name", bg=CARD, fg=TEXT, font=F(10, "bold")).pack(anchor="w")
+        regions = sorted({(r.get("region") or "") for r in self.db.lead_records()
+                          if domains and r["domain"] in set(domains)} - {""})
+        default = (", ".join(regions[:2]) + " · " if regions else ("Super + Hot · " if not domains else "")) \
+            + dt.date.today().strftime("%d %b")
+        cname = tk.StringVar(value=default)
+        ttk.Entry(f, textvariable=cname, width=46).pack(anchor="w", pady=(2, 4))
+        tk.Label(f, text="Next: the app writes the emails, shows them to you in one window, "
+                         "and you click Send once.", bg=CARD, fg=MUTED, font=F(9)).pack(anchor="w")
         mode = tk.StringVar(value="check")
-        ttk.Radiobutton(f, text="Show me the emails first; I approve, then they send",
-                        value="check", variable=mode).pack(anchor="w")
-        ttk.Radiobutton(f, text="Approve and send them for me now (1–2 minutes apart)",
-                        value="send", variable=mode).pack(anchor="w")
         auto = tk.BooleanVar(value=bool(s.get("autopilot")) and not domains)
         if not domains:
             ttk.Checkbutton(f, text="Autopilot: do this every day until everyone is contacted, and send their "
@@ -641,8 +653,17 @@ class App:
                 self.db.set_kv("autopilot_last", dt.date.today().isoformat())
             key = S.get_secret(self.cfg, "psi_key")
 
+            cid = O.new_campaign(self.db, cname.get().strip() or default)
+
             def done(res):
                 if not res:
+                    return
+                if not send:
+                    if res.get("ids"):
+                        self.review_batch(cid)
+                    else:
+                        self.toast("No emails were written (nothing left to contact).")
+                    self.refresh_page()
                     return
                 if send:
                     left = res.get("queued", 0)
@@ -657,11 +678,11 @@ class App:
                     self.show("outreach", view="draft")
             if domains:
                 self.run_job("Contacting leads",
-                             lambda: O.contact_leads(self.db, self.cfg, picked, use_ai, send, key), after=done)
+                             lambda: O.contact_leads(self.db, self.cfg, picked, use_ai, send, key, campaign_id=cid), after=done)
             else:
-                self.run_job("Contacting leads", lambda: O.contact_today(self.db, self.cfg, use_ai, send, key),
+                self.run_job("Contacting leads", lambda: O.contact_today(self.db, self.cfg, use_ai, send, key, campaign_id=cid),
                              after=done)
-        Btn(bb, text="Start", style="Primary.TButton", command=start).pack(side="right")
+        Btn(bb, text="Write emails  →", style="Primary.TButton", command=start).pack(side="right")
         Btn(bb, text="Cancel", command=win.destroy).pack(side="right", padx=8)
         if not waiting:
             tk.Label(f, text="Nothing to send: " + ("none of these can be emailed." if domains
@@ -671,6 +692,147 @@ class App:
         x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_width()) // 2
         y = self.root.winfo_rooty() + (self.root.winfo_height() - win.winfo_height()) // 3
         win.geometry(f"+{max(0, x)}+{max(0, y)}")
+
+    def review_batch(self, cid: int):
+        """One window: every email of this campaign, tick/untick, edit, then ONE Send."""
+        ms = [m for m in O.campaign_messages(self.db, cid) if m["status"] in ("draft", "approved", "failed")]
+        if not ms:
+            return self.toast("Nothing waiting in this campaign.")
+        name = (self.db.q("SELECT name FROM campaigns WHERE id=?", (cid,)) or [("Campaign",)])[0][0]
+        names = {r["domain"]: (r["name"] or r["domain"]) for r in self.db.lead_records()}
+        win = tk.Toplevel(self.root)
+        win.title(f"Review and send · {name}")
+        win.configure(bg=BG)
+        win.geometry("1100x680")
+        win.transient(self.root)
+        top = tk.Frame(win, bg=BG)
+        top.pack(fill="x", padx=16, pady=(14, 8))
+        tk.Label(top, text=name, bg=BG, fg=TEXT, font=F(14, "bold")).pack(anchor="w")
+        info = tk.Label(top, bg=BG, fg=MUTED, font=F(10), anchor="w", justify="left")
+        info.pack(anchor="w")
+        mid = tk.Frame(win, bg=BG)
+        mid.pack(fill="both", expand=True, padx=16)
+        lc = card(mid, pad=8)
+        lc.pack(side="left", fill="both", expand=True)
+        fr, tree = make_tree(lc.inner, [("on", "Send", 50), ("biz", "Business", 210), ("to", "To", 220)],
+                             height=20)
+        fr.pack(fill="both", expand=True)
+        rc = card(mid, pad=12)
+        rc.pack(side="left", fill="both", expand=True, padx=(12, 0))
+        to_v, subj_v = tk.StringVar(), tk.StringVar()
+        for lab, var in (("To", to_v), ("Subject", subj_v)):
+            r = tk.Frame(rc.inner, bg=CARD)
+            r.pack(fill="x", pady=2)
+            tk.Label(r, text=lab, bg=CARD, fg=MUTED, width=8, anchor="w").pack(side="left")
+            ttk.Entry(r, textvariable=var).pack(side="left", fill="x", expand=True)
+        body = tk.Text(rc.inner, wrap="word", font=F(10), relief="flat", padx=10, pady=8,
+                       highlightthickness=1, highlightbackground=BORDER)
+        body.pack(fill="both", expand=True, pady=(6, 0))
+        on = {m["id"]: True for m in ms}
+        byid = {m["id"]: m for m in ms}
+        cur = [None]
+
+        def save_cur():
+            m = byid.get(cur[0])
+            if not m:
+                return
+            m.update(to_addr=to_v.get().strip(), subject=subj_v.get().strip(), body=body.get("1.0", "end").rstrip())
+            O.update_message(self.db, m["id"], to_addr=m["to_addr"], subject=m["subject"], body=m["body"])
+
+        def update_info():
+            n = sum(on.values())
+            room = max(0, O.daily_limit(self.db, self.cfg) - O.sent_today(self.db))
+            today = min(n, room)
+            info.config(text=f"{len(ms)} emails written. {n} ticked to send.  "
+                             f"{today} go out now (1–2 minutes apart)"
+                             + (f", the other {n - today} go out by themselves on the next days "
+                                "(daily limit), while the app is open." if n > today else "."))
+            send_btn.config(text=f"📤  Send {n} email{'s' if n != 1 else ''}", state="normal" if n else "disabled")
+
+        def load(e=None):
+            i = tree.focus()
+            if not i:
+                return
+            save_cur()
+            m = byid[int(i)]
+            cur[0] = m["id"]
+            to_v.set(m["to_addr"]); subj_v.set(m["subject"])
+            body.delete("1.0", "end"); body.insert("1.0", m["body"])
+
+        def toggle(e):
+            i = tree.identify_row(e.y)
+            if i and tree.identify_column(e.x) == "#1":
+                on[int(i)] = not on[int(i)]
+                tree.set(i, "on", "☑" if on[int(i)] else "☐")
+                update_info()
+
+        for m in ms:
+            tree.insert("", "end", iid=str(m["id"]), values=("☑", names.get(m["domain"], m["domain"]), m["to_addr"]))
+        tree.bind("<<TreeviewSelect>>", load)
+        tree.bind("<Button-1>", toggle, add="+")
+        bb = tk.Frame(win, bg=BG)
+        bb.pack(fill="x", padx=16, pady=12)
+
+        def set_all(v):
+            for k in on:
+                on[k] = v
+                tree.set(str(k), "on", "☑" if v else "☐")
+            update_info()
+
+        Btn(bb, text="Tick all", command=lambda: set_all(True)).pack(side="left")
+        Btn(bb, text="Untick all", command=lambda: set_all(False)).pack(side="left", padx=6)
+        Btn(bb, text="👁  Preview design", command=lambda: (save_cur(), cur[0] and self._preview_msg(cur[0]))).pack(side="left")
+
+        def later():
+            save_cur()
+            win.destroy()
+            self.toast("Saved. Open Outreach → Campaigns to send them later.")
+            self.refresh_page()
+
+        def send():
+            save_cur()
+            ids = [k for k, v in on.items() if v]
+            bad = [byid[k]["to_addr"] for k in ids
+                   if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", byid[k]["to_addr"] or "")]
+            if bad:
+                return messagebox.showwarning("Email", "These addresses don't look right:\n" + "\n".join(bad), parent=win)
+            if not S.get_secret(self.cfg, "smtp_password"):
+                return messagebox.showwarning("Email", "Connect your email first: Settings > Email account.", parent=win)
+            win.destroy()
+            self.run_job("Sending emails", lambda: O.send_now(self.db, self.cfg, ids),
+                         after=lambda r: r and (self.toast(f"{name}: {r['sent']} sent" + (
+                             f", {r['waiting']} go out on the next days." if r["waiting"] else "."), GREEN),
+                             self.refresh_page()))
+            self.toast(f"Sending {len(ids)} emails in the background. Watch them in Outreach → Campaigns.")
+
+        send_btn = Btn(bb, text="📤  Send", style="Primary.TButton", command=send)
+        send_btn.pack(side="right")
+        Btn(bb, text="Save for later", command=later).pack(side="right", padx=8)
+        kids = tree.get_children()
+        if kids:
+            tree.selection_set(kids[0]); tree.focus(kids[0]); load()
+        update_info()
+
+    def _preview_msg(self, mid):
+        try:
+            p = self.pages.get("outreach")
+            if p:
+                p.refresh(select=mid)
+                p.preview()
+        except Exception as e:
+            self.toast(f"Preview failed: {e}")
+
+    def leftovers_tick(self):
+        """Emails you clicked Send on that didn't fit yesterday's limit go out today."""
+        try:
+            if (S.get_secret(self.cfg, "smtp_password") and "Sending emails" not in self.side_jobs
+                    and self.db.q("SELECT 1 FROM messages WHERE status='approved' AND auto_send=1 LIMIT 1")
+                    and O.daily_limit(self.db, self.cfg) - O.sent_today(self.db) > 0):
+                self.run_job("Sending emails", lambda: O.send_leftovers(self.db, self.cfg),
+                             after=lambda n: n and self.toast(f"{n} waiting campaign emails sent", GREEN))
+        except Exception:
+            pass
+        self.root.after(30 * 60 * 1000, self.leftovers_tick)
 
     def badge_tick(self):
         """Little count bubbles in the sidebar: drafts waiting / approved to send, and new replies."""
@@ -2554,7 +2716,7 @@ class Profile:
 # ---------------------------------------------------------------------------
 class OutreachPage(Page):
     title = "Outreach"
-    subtitle = "Nothing is sent until you approve it."
+    subtitle = "Pick leads, check the emails in one window, click Send once. Nothing goes out without that."
 
     def build(self):
         top = card(self.body, pad=12)
@@ -2582,9 +2744,9 @@ class OutreachPage(Page):
         left.pack(side="left", fill="both", expand=True)
         fb = tk.Frame(left.inner, bg=CARD)
         fb.pack(fill="x", pady=(0, 8))
-        self.filter = tk.StringVar(value="draft")
+        self.filter = tk.StringVar(value="campaigns")
         self.tab_btns = {}
-        self.tab_names = {"draft": "Waiting for approval", "approved": "Approved", "sent": "Sent",
+        self.tab_names = {"campaigns": "Campaigns", "draft": "Waiting for approval", "approved": "Approved", "sent": "Sent",
                           "failed": "Failed", "cancelled": "Cancelled", "replies": "Replies"}
         for val, txt in self.tab_names.items():
             b = ttk.Radiobutton(fb, text=txt, value=val, variable=self.filter, command=self.fill)
@@ -2622,6 +2784,9 @@ class OutreachPage(Page):
         Btn(br, text="Approve all", command=self.approve_all).pack(side="right")
         self.btn_answer = Btn(br, text="✎  Draft an answer", style="Dark.TButton", command=self.answer)
         self.btn_spam = Btn(br, text="🚫  Spam", command=self.mark_spam)
+        self.btn_campaign = Btn(br, text="📤  Review and send", style="Dark.TButton",
+                                command=lambda: self.cur_campaign and self.app.review_batch(self.cur_campaign))
+        self.cur_campaign = None
         br2 = tk.Frame(r, bg=CARD)
         br2.pack(fill="x", pady=(8, 0))
         Btn(br2, text="👁  Preview", command=self.preview).pack(side="left")
@@ -2661,6 +2826,7 @@ class OutreachPage(Page):
         """Show how many emails are in each tab, e.g. 'Approved (26)'."""
         n = {st: c for st, c in self.db.q("SELECT status, COUNT(*) FROM messages GROUP BY status")}
         n["replies"] = self.db.q("SELECT COUNT(*) FROM replies WHERE kind != 'spam'")[0][0]
+        n["campaigns"] = len(O.campaign_stats(self.db))
         new_r = self.db.q("SELECT COUNT(*) FROM replies WHERE kind != 'spam' AND COALESCE(handled,0)=0")[0][0]
         for val, b in self.tab_btns.items():
             label = f"{self.tab_names[val]} ({n.get(val, 0)})"
@@ -2674,6 +2840,29 @@ class OutreachPage(Page):
         except Exception:
             pass
         self.tree.delete(*self.tree.get_children())
+        self.btn_campaign.pack_forget()
+        if self.filter.get() == "campaigns":
+            self.btn_answer.pack_forget()
+            self.btn_spam.pack_forget()
+            self.btn_approve.config(state="disabled")
+            for c in O.campaign_stats(self.db):
+                waiting = c["draft"] + c["approved"]
+                self.tree.insert("", "end", iid=f"c{c['id']}", values=(
+                    c["name"], f"Sent {c['sent']}/{c['total']}" + (f" · {waiting} waiting" if waiting else "")
+                    + (f" · {c['failed']} failed" if c["failed"] else ""),
+                    f"👁{c['opened']} ↩{c['replied']}", (c["created"] or "")[:16].replace("T", " ")))
+            kids = self.tree.get_children()
+            if kids:
+                sel = select if select and self.tree.exists(str(select)) else kids[0]
+                self.tree.selection_set(sel); self.tree.focus(sel); self.on_select()
+            else:
+                self.cur = None
+                self.to.set(""); self.subj.set("")
+                self.body_t.config(state="normal")
+                self.body_t.delete("1.0", "end")
+                self.body_t.insert("1.0", "No campaigns yet.\n\nGo to Leads, tick the leads you want, click "
+                                          "'Email selected', then Send. Or click 'Contact Super + Hot'.")
+            return
         if self.filter.get() == "replies":
             self.btn_approve.config(state="disabled")
             self.btn_answer.pack(side="left", padx=6)
@@ -2720,6 +2909,9 @@ class OutreachPage(Page):
         i = self.tree.focus()
         if not i:
             return
+        if i.startswith("c"):
+            self.show_campaign(int(i[1:]))
+            return
         if i.startswith("r"):
             row = self.db.q("SELECT domain, from_addr, subject, snippet, kind FROM replies WHERE id=?", (int(i[1:]),))
             if not row:
@@ -2750,6 +2942,43 @@ class OutreachPage(Page):
         editable = m["status"] in ("draft", "approved", "failed")
         self.btn_approve.config(state="normal" if m["status"] in ("draft", "failed") else "disabled")
         self.body_t.config(state="normal" if editable else "disabled")
+
+    def show_campaign(self, cid):
+        """What happened to every email in this campaign."""
+        self.cur = None
+        self.cur_campaign = cid
+        c = next((c for c in O.campaign_stats(self.db) if c["id"] == cid), None)
+        if not c:
+            return
+        ms = O.campaign_messages(self.db, cid)
+        waiting = c["draft"] + c["approved"]
+        self.to.set(f"{c['total']} leads")
+        self.subj.set(c["name"])
+        lines = [f"Sent {c['sent']} of {c['total']}   ·   Waiting {waiting}   ·   Opened their review {c['opened']}   ·   "
+                 f"Replied {c['replied']}   ·   Bounced {c['bounced']}" + (f"   ·   Failed {c['failed']}" if c["failed"] else ""),
+                 ""]
+        label = {"draft": "Not sent yet (needs your Send)", "approved": "Queued (goes out within the daily limit)",
+                 "failed": "FAILED", "cancelled": "Skipped"}
+        for m in ms:
+            nm = self.names.get(m["domain"], m["domain"])
+            if m["status"] == "sent":
+                sig = O.lead_signals(self.db, m["domain"])
+                tags = [t for t, on in (("opened review", sig["opened"]), ("REPLIED", sig["replied"]),
+                                        ("bounced", sig["bounced"])) if on]
+                st = "Sent " + (m["sent_at"] or "")[:16].replace("T", " ") + (" · " + ", ".join(tags) if tags else "")
+                mark = "✓"
+            else:
+                st = label.get(m["status"], m["status"]) + (f": {m['error']}" if m["status"] == "failed" and m.get("error") else "")
+                mark = "•"
+            lines.append(f"{mark} {nm}  <{m['to_addr']}>\n      {st}")
+        self.body_t.config(state="normal")
+        self.body_t.delete("1.0", "end")
+        self.body_t.insert("1.0", "\n".join(lines))
+        self.body_t.config(state="disabled")
+        self.att_lbl.config(text="")
+        if waiting or c["failed"]:
+            self.btn_campaign.config(text=f"📤  Review and send ({waiting + c['failed']})")
+            self.btn_campaign.pack(side="left", padx=6)
 
     def save(self, quiet=False):
         if not self.cur or self.cur["status"] not in ("draft", "approved", "failed"):

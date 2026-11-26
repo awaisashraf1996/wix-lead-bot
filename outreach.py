@@ -179,6 +179,12 @@ def init(db: W.DB) -> None:
         have = {r[1] for r in db.conn.execute("PRAGMA table_info(messages)")}
         if "attachments" not in have:
             db.conn.execute("ALTER TABLE messages ADD COLUMN attachments TEXT")
+        if "campaign_id" not in have:
+            db.conn.execute("ALTER TABLE messages ADD COLUMN campaign_id INTEGER")
+        if "auto_send" not in have:      # you clicked Send: leftovers over the daily limit go out on their own
+            db.conn.execute("ALTER TABLE messages ADD COLUMN auto_send INTEGER DEFAULT 0")
+        db.conn.execute("CREATE TABLE IF NOT EXISTS campaigns (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                        "name TEXT, created_at TEXT)")
         db.conn.commit()
 
 
@@ -428,7 +434,8 @@ def leads_to_contact(db: W.DB, levels=("super", "hot")) -> int:
     return n
 
 
-def contact_today(db: W.DB, cfg, use_ai: bool, approve: bool, psi_key: str = "") -> dict:
+def contact_today(db: W.DB, cfg, use_ai: bool, approve: bool, psi_key: str = "",
+                  campaign_id: int | None = None) -> dict:
     """One click: write first emails for today's Super + Hot leads (as many as today's
     sending limit allows), approve them if you said so, and send them slowly."""
     init(db)
@@ -442,7 +449,9 @@ def contact_today(db: W.DB, cfg, use_ai: bool, approve: bool, psi_key: str = "")
         else:
             draft_for_level(db, cfg, limit=room)
     new = [m for m in messages(db, "draft") if m["id"] not in before and m["step"] == 1]
-    out = {"drafted": len(new), "approved": 0, "sent": 0, "room": room}
+    if campaign_id:
+        tag_campaign(db, campaign_id, [m["id"] for m in new])
+    out = {"drafted": len(new), "approved": 0, "sent": 0, "room": room, "ids": [m["id"] for m in new]}
     if not approve:
         return out
     for m in new:
@@ -488,7 +497,82 @@ def can_contact(db: W.DB, lead: dict) -> str:
     return ""
 
 
-def contact_leads(db: W.DB, cfg, domains: list[str], use_ai: bool, approve: bool, psi_key: str = "") -> dict:
+# ---------------------------------------------------------------------------
+# Campaigns: every "Email selected" / "Contact Super + Hot" batch, so you can see
+# what went out, when, and who opened or replied.
+# ---------------------------------------------------------------------------
+def new_campaign(db: W.DB, name: str) -> int:
+    init(db)
+    with db.lock:
+        cur = db.conn.execute("INSERT INTO campaigns (name, created_at) VALUES (?,?)", (name, W.now()))
+        db.conn.commit()
+        return cur.lastrowid
+
+
+def tag_campaign(db: W.DB, cid: int, mids) -> None:
+    for mid in mids:
+        db.x("UPDATE messages SET campaign_id=? WHERE id=? AND campaign_id IS NULL", (cid, mid))
+
+
+def campaign_messages(db: W.DB, cid: int) -> list[dict]:
+    init(db)
+    with db.lock:
+        cur = db.conn.execute("SELECT * FROM messages WHERE campaign_id=? ORDER BY id", (cid,))
+        names = [d[0] for d in cur.description]
+        return [dict(zip(names, r)) for r in cur.fetchall()]
+
+
+def lead_signals(db: W.DB, domain: str) -> dict:
+    """Opened the review page? Replied? Bounced?"""
+    st = (get_outreach(db, domain) or {}).get("status", "")
+    opened = bool(db.q("SELECT 1 FROM tasks WHERE domain=? AND kind='viewed'", (domain,)))
+    replied = st in ("replied", "call_booked", "proposal_sent", "won", "later") or bool(db.q(
+        "SELECT 1 FROM replies WHERE domain=? AND kind NOT IN ('spam','inquiry')", (domain,)))
+    return {"opened": opened, "replied": replied, "bounced": st == "bounced", "status": st}
+
+
+def campaign_stats(db: W.DB) -> list[dict]:
+    init(db)
+    out = []
+    for cid, name, created in db.q("SELECT id, name, created_at FROM campaigns ORDER BY id DESC"):
+        ms = campaign_messages(db, cid)
+        if not ms:
+            continue
+        c = {"id": cid, "name": name, "created": created, "total": len(ms),
+             "draft": 0, "approved": 0, "sent": 0, "failed": 0, "cancelled": 0,
+             "opened": 0, "replied": 0, "bounced": 0}
+        for m in ms:
+            c[m["status"]] = c.get(m["status"], 0) + 1
+            if m["status"] == "sent":
+                sig = lead_signals(db, m["domain"])
+                c["opened"] += sig["opened"]
+                c["replied"] += sig["replied"]
+                c["bounced"] += sig["bounced"]
+        out.append(c)
+    return out
+
+
+def send_now(db: W.DB, cfg, ids: list[int]) -> dict:
+    """You clicked Send on a batch: approve these, send as many as today allows,
+    the rest go out by themselves on the next days (while the app is open)."""
+    for mid in ids:
+        update_message(db, mid, status="approved", approved_at=W.now(), error=None)
+        db.x("UPDATE messages SET auto_send=1 WHERE id=?", (mid,))
+    sent = send_approved(db, cfg, only_ids=ids)
+    waiting = db.q("SELECT COUNT(*) FROM messages WHERE status='approved' AND auto_send=1")[0][0]
+    return {"sent": sent, "waiting": waiting}
+
+
+def send_leftovers(db: W.DB, cfg) -> int:
+    """Emails you already clicked Send on but that didn't fit today's limit."""
+    ids = [r[0] for r in db.q("SELECT id FROM messages WHERE status='approved' AND auto_send=1 ORDER BY id")]
+    if not ids or daily_limit(db, cfg) - sent_today(db) <= 0:
+        return 0
+    return send_approved(db, cfg, only_ids=ids)
+
+
+def contact_leads(db: W.DB, cfg, domains: list[str], use_ai: bool, approve: bool, psi_key: str = "",
+                  campaign_id: int | None = None) -> dict:
     """Email the leads you picked: write (Gemini or template), approve if you said so,
     and send. Sends today up to the daily limit; the rest stay approved for the next send."""
     init(db)
@@ -525,6 +609,9 @@ def contact_leads(db: W.DB, cfg, domains: list[str], use_ai: bool, approve: bool
         if not mid:
             continue
         out["drafted"] += 1
+        out.setdefault("ids", []).append(mid)
+        if campaign_id:
+            tag_campaign(db, campaign_id, [mid])
         if approve:
             update_message(db, mid, status="approved")
             out["approved"] += 1
