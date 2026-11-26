@@ -245,11 +245,40 @@ def views(db: W.DB, domain: str) -> dict:
 # ---------------------------------------------------------------------------
 # Website inquiries
 # ---------------------------------------------------------------------------
+SPAM_RE = re.compile(
+    r"\bseo\b|backlink|guest post|rank (your|on)|first page of google|more traffic|increase (your )?traffic|"
+    r"web ?traffic|crypto|bitcoin|forex|loan|casino|viagra|cbd|investment opportunit|lead generation service|"
+    r"we (can|will) (build|design|redesign) your|app development|outsourc|offshore|virtual assistant|"
+    r"unsubscribe|opt.?out|whatsapp me|telegram|marketing services|press release|domain (name )?(for sale|expir)|"
+    r"buy (followers|likes)|youtube (views|subscribers)|instagram followers|\$\d+ (per|/) ?month",
+    re.I)
+
+
+def is_spam_inquiry(it: dict) -> bool:
+    """Contact-form spam: sales pitches for SEO/marketing/dev services, crypto, link drops."""
+    text = " ".join(str(it.get(k) or "") for k in ("title", "name", "message", "website"))
+    links = len(re.findall(r"https?://|www\.", text))
+    return bool(SPAM_RE.search(text)) or links >= 3 or (len((it.get("message") or "").strip()) < 15
+                                                     and not it.get("website"))
+
+
 def import_inquiries(db: W.DB, cfg) -> int:
     import ai
     import outreach as O
     O.init(db)
     ai.init(db)
+    if db.get_kv("inq_cleanup_v2", "") != "1":
+        # earlier versions counted inquiries as lead replies: undo that
+        for key, kind, subj, snip in db.q("SELECT domain, kind, subject, snippet FROM replies "
+                                          "WHERE snippet LIKE '[Website inquiry%'"):
+            if not db.q("SELECT 1 FROM messages WHERE domain=? AND status='sent'", (key,)):
+                db.x("DELETE FROM outreach WHERE domain=?", (key,))
+            spam = is_spam_inquiry({"title": subj, "message": snip.split("] ", 1)[-1]})
+            db.x("UPDATE replies SET kind=?, handled=? WHERE domain=? AND snippet LIKE '[Website inquiry%'",
+                 ("spam" if spam else "inquiry", 1 if spam else 0, key))
+            if spam:
+                db.x("UPDATE tasks SET done=1 WHERE domain=? AND kind='inquiry'", (key,))
+        db.set_kv("inq_cleanup_v2", "1")
     if db.get_kv("inq_cleanup_v1", "") != "1":
         # inquiries from personal mailboxes (proton.me, gmail...) are not company websites
         for (d,) in db.q("SELECT DISTINCT domain FROM businesses WHERE category='inquiry'"):
@@ -275,11 +304,16 @@ def import_inquiries(db: W.DB, cfg) -> int:
             except Exception:
                 pass
         snippet = f"[Website inquiry · {it.get('type') or 'contact form'}] {it.get('message') or ''}".strip()
-        db.x("INSERT OR IGNORE INTO replies (domain, from_addr, subject, snippet, kind, received_at)"
-             " VALUES (?,?,?,?,?,?)",
-             (key, email_addr, it.get("title") or "Website inquiry", snippet[:2000], "interested",
-              it.get("date") or W.now()))
-        O.set_status(db, key, "replied", to_addr=email_addr or None)
+        spam = is_spam_inquiry(it)
+        # Inquiries are kept apart from lead replies: they never change a lead's status
+        # or the "Replied" numbers.
+        db.x("INSERT OR IGNORE INTO replies (domain, from_addr, subject, snippet, kind, received_at, handled)"
+             " VALUES (?,?,?,?,?,?,?)",
+             (key, email_addr, it.get("title") or "Website inquiry", snippet[:2000],
+              "spam" if spam else "inquiry", it.get("date") or W.now(), 1 if spam else 0))
+        if spam:
+            W.log(f"  Website inquiry from {email_addr or key} looks like spam: filed away, no task.")
+            continue
         db.x("INSERT OR IGNORE INTO tasks (domain, kind, due) VALUES (?,?,?)",
              (key, "inquiry", dt.date.today().isoformat()))
         n += 1

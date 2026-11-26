@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS replies (
 );
 """
 REPLY_KINDS = {"interested": "Interested", "question": "Question / price", "later": "Not now",
-               "no": "Not interested", "unsubscribe": "Unsubscribe", "other": "Other"}
+               "no": "Not interested", "unsubscribe": "Unsubscribe", "other": "Other",
+               "inquiry": "Website inquiry", "spam": "Spam"}
 _last_call = [0.0]
 
 

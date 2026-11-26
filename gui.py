@@ -2586,6 +2586,7 @@ class OutreachPage(Page):
         Btn(br, text="Skip", command=lambda: self.set_selected("cancelled")).pack(side="left")
         Btn(br, text="Approve all", command=self.approve_all).pack(side="right")
         self.btn_answer = Btn(br, text="✎  Draft an answer", style="Dark.TButton", command=self.answer)
+        self.btn_spam = Btn(br, text="🚫  Spam", command=self.mark_spam)
         br2 = tk.Frame(r, bg=CARD)
         br2.pack(fill="x", pady=(8, 0))
         Btn(br2, text="👁  Preview", command=self.preview).pack(side="left")
@@ -2625,8 +2626,10 @@ class OutreachPage(Page):
         if self.filter.get() == "replies":
             self.btn_approve.config(state="disabled")
             self.btn_answer.pack(side="left", padx=6)
+            self.btn_spam.pack(side="left")
             for rid, dom, frm, subj, kind, when, handled in self.db.q(
-                    "SELECT id, domain, from_addr, subject, kind, received_at, handled FROM replies ORDER BY id DESC"):
+                    "SELECT id, domain, from_addr, subject, kind, received_at, handled FROM replies "
+                    "WHERE kind != 'spam' ORDER BY id DESC"):
                 self.tree.insert("", "end", iid=f"r{rid}", values=(
                     self.names.get(dom, dom), frm, ai.REPLY_KINDS.get(kind, kind) + (" ✓" if handled else ""),
                     (when or "")[:16].replace("T", " ")))
@@ -2637,6 +2640,7 @@ class OutreachPage(Page):
                 self.on_select()
             return
         self.btn_answer.pack_forget()
+        self.btn_spam.pack_forget()
         for m in O.messages(self.db, self.filter.get()):
             self.tree.insert("", "end", iid=str(m["id"]), values=(
                 self.names.get(m["domain"], m["domain"]), m["to_addr"],
@@ -2772,6 +2776,20 @@ class OutreachPage(Page):
         if self.cur["step"] == 1:
             self.app.toast("Tip: attachments in a first email often go to spam. Better in a follow-up.", AMBER)
         self.fill(self.cur["id"])
+
+    def mark_spam(self):
+        r = getattr(self, "cur_reply", None)
+        if not r:
+            return
+        d = r["domain"]
+        self.db.x("UPDATE replies SET kind='spam', handled=1 WHERE id=?", (r["id"],))
+        self.db.x("UPDATE tasks SET done=1 WHERE domain=? AND kind IN ('inquiry','viewed')", (d,))
+        if not self.db.q("SELECT 1 FROM messages WHERE domain=? AND status='sent'", (d,)):
+            self.db.x("DELETE FROM outreach WHERE domain=?", (d,))      # never a lead conversation
+        elif not self.db.q("SELECT 1 FROM replies WHERE domain=? AND kind!='spam'", (d,)):
+            O.set_status(self.db, d, "emailed")                         # follow-ups continue
+        self.app.toast("Marked as spam. It no longer counts as a reply.")
+        self.fill()
 
     def answer(self):
         r = getattr(self, "cur_reply", None)
