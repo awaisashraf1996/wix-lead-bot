@@ -180,15 +180,28 @@ def add_link_to_draft(db: W.DB, domain: str, url: str) -> bool:
             continue
         line = AUDIT_LINE.format(url=url)
         body = re.sub(r"\n*Your free website review is ready: \S+\n*", "\n\n", body)
-        marker = re.search(r"\n\n(Would a free 15-minute call|Would you like|Worth a quick)", body)
-        if marker:
-            body = body[:marker.start()] + "\n\n" + line + body[marker.start():]
-        else:
-            parts = body.split("\n\n")
-            body = "\n\n".join(parts[:2] + [line] + parts[2:])
+        body = insert_review_line(body, line)
         db.x("UPDATE messages SET body=? WHERE id=?", (body, mid))
         changed = True
     return changed
+
+
+CTA_RE = re.compile(r"15.minute|calendly|book a|a quick call|free call|reply (with )?[\"']?yes|"
+                    r"would you like|are you free|worth a (quick )?(look|chat)|interested\?", re.I)
+SIGNOFF_RE = re.compile(r"^(best|thanks|thank you|cheers|regards|kind regards|warm regards|all the best|"
+                        r"sincerely|talk soon|--)\b", re.I)
+
+
+def insert_review_line(body: str, line: str) -> str:
+    """Put the review link as its own paragraph just before the call to action (never
+    between a sentence ending in ':' and its bullet list)."""
+    parts = body.split("\n\n")
+    at = next((i for i, p in enumerate(parts) if i > 0 and CTA_RE.search(p)), None)
+    if at is None:
+        at = next((i for i, p in enumerate(parts) if i > 0 and SIGNOFF_RE.match(p.strip())), len(parts))
+    while at > 1 and parts[at - 1].rstrip().endswith(":"):
+        at -= 1
+    return "\n\n".join(parts[:at] + [line] + parts[at:])
 
 
 def publish_for_drafts(db: W.DB, cfg) -> int:
@@ -404,11 +417,29 @@ def won_project(db: W.DB, cfg, domain: str) -> str:
     return j.get("edit", "")
 
 
+def tidy_review_lines(db: W.DB) -> int:
+    """Move review links in waiting drafts to the right place (once)."""
+    if db.get_kv("review_line_v2", "") == "1":
+        return 0
+    n = 0
+    for mid, body in db.q("SELECT id, body FROM messages WHERE status IN ('draft','approved') "
+                          "AND body LIKE '%Your free website review is ready:%'"):
+        m = re.search(r"Your free website review is ready: \S+", body)
+        new = insert_review_line(re.sub(r"\n*Your free website review is ready: \S+\n*", "\n\n", body).strip(),
+                                 m.group(0))
+        if new != body:
+            db.x("UPDATE messages SET body=? WHERE id=?", (new, mid))
+            n += 1
+    db.set_kv("review_line_v2", "1")
+    return n
+
+
 def run_background(db: W.DB, cfg) -> dict:
     """What the app does every few minutes when the website is connected."""
     out = {"views": [], "inquiries": 0}
     if not enabled(cfg):
         return out
+    tidy_review_lines(db)
     s = settings(cfg)
     try:
         out["views"] = check_views(db, cfg)

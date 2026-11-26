@@ -951,8 +951,7 @@ def send_as_client(db: W.DB, cfg, lead: dict, to_addr: str) -> str:
             if WS.enabled(cfg) and WS.settings(cfg)["audit_pages"]:
                 url = WS.audit_url(db, lead["domain"]) or WS.publish_audit(db, cfg, lead)
                 if url:
-                    parts = body.split("\n\n")
-                    body = "\n\n".join(parts[:3] + [WS.AUDIT_LINE.format(url=url)] + parts[3:])
+                    body = WS.insert_review_line(body, WS.AUDIT_LINE.format(url=url))
         except Exception as e:
             W.log(f"  Review page skipped: {e}")
         msg = {"domain": lead["domain"], "step": 1, "subject": _fill(subj, lead, s), "body": body}
