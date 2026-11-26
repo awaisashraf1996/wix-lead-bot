@@ -919,7 +919,6 @@ def send_approved(db: W.DB, cfg) -> int:
     Pause/Stop buttons. Returns how many were sent."""
     init(db)
     s = settings(cfg)
-    W.STOP.clear()
     queue = list(reversed(messages(db, "approved")))
     limit = daily_limit(db, cfg)
     room = max(0, limit - sent_today(db))
@@ -928,39 +927,34 @@ def send_approved(db: W.DB, cfg) -> int:
         W.log("Nothing to send (no approved emails, or today's limit is reached).")
         return 0
     region_of = {d: r for d, r in db.q("SELECT domain, region FROM businesses")}
-    if s["business_hours_only"]:
-        # send to whoever is in business hours right now first; wait for the rest
-        ordered, waiting = [], list(queue)
-        while waiting and not W.send_stopped():
-            ready = [m for m in waiting if in_business_hours(region_of.get(m["domain"]))]
-            if ready:
-                ordered.append(ready[0])
-                waiting.remove(ready[0])
-                if len(ordered) == 1:
-                    break
-            else:
-                W.progress(phase="send", done=0, total=len(queue),
-                           label="Waiting for business hours in your leads' time zones")
-                end = time.time() + 60
-                while time.time() < end and not W.send_stopped():
-                    time.sleep(0.5)
-        queue = ordered + waiting
     W.log(f"\nSending {len(queue)} approved emails (limit today {limit}"
           + (f", warming up to {s['daily_limit']}" if limit < int(s['daily_limit']) else "") + ")...")
     sent = 0
     srv = None
+    pending = list(queue)
+    i = -1
     try:
-        for i, msg in enumerate(queue):
+        while pending:
             W.wait_if_paused()
             if W.send_stopped():
                 break
-            while s["business_hours_only"] and not in_business_hours(region_of.get(msg["domain"])) \
-                    and not W.send_stopped():
-                W.progress(phase="send", done=i, total=len(queue),
-                           label=f"Waiting for business hours where {msg['to_addr']} is")
-                time.sleep(30)
-            if W.send_stopped():
-                break
+            if s["business_hours_only"]:
+                # always send to whoever is open right now; never let a closed one block the rest
+                ready = [m for m in pending if in_business_hours(region_of.get(m["domain"]))]
+                if not ready:
+                    W.send_status(f"{sent} sent · {len(pending)} waiting for their business hours "
+                                  "(Mon–Fri 9–5 their time)")
+                    W.progress(phase="send", done=sent, total=len(queue),
+                               label="Waiting for business hours in your leads' time zones")
+                    end = time.time() + 60
+                    while time.time() < end and not W.send_stopped():
+                        time.sleep(0.5)
+                    continue
+                msg = ready[0]
+            else:
+                msg = pending[0]
+            pending.remove(msg)
+            i += 1
             if is_suppressed(db, msg["to_addr"], msg["domain"]):
                 update_message(db, msg["id"], status="cancelled", error="unsubscribed")
                 continue
@@ -982,7 +976,11 @@ def send_approved(db: W.DB, cfg) -> int:
                     srv = _smtp(cfg)
                 em = build_message(cfg, msg, st.get("thread_msgid") if msg["step"] > 1 else None,
                                    design_extras(db, msg["domain"]))
-                srv.send_message(em)
+                try:
+                    srv.send_message(em)
+                except smtplib.SMTPServerDisconnected:
+                    srv = _smtp(cfg)          # the connection timed out while we waited: reconnect once
+                    srv.send_message(em)
             except (smtplib.SMTPException, OSError) as e:
                 update_message(db, msg["id"], status="failed", error=str(e)[:300])
                 W.log(f"  FAILED {msg['to_addr']}: {e}")
@@ -1004,12 +1002,14 @@ def send_approved(db: W.DB, cfg) -> int:
             sent += 1
             W.log(f"  SENT step {msg['step']} to {msg['to_addr']}")
             W.progress(phase="send", done=i + 1, total=len(queue), label=f"Sent {sent}")
-            if i < len(queue) - 1:
+            W.send_status(f"{sent} sent · {len(pending)} to go")
+            if pending:
                 wait = random.uniform(s["delay_min"], s["delay_max"])
                 end = time.time() + wait
                 while time.time() < end and not W.send_stopped():
                     time.sleep(0.5)
     finally:
+        W.send_status("")
         if srv is not None:
             try:
                 srv.quit()

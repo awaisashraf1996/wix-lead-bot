@@ -873,7 +873,9 @@ class App:
         return True
 
     def _side_label(self):
-        self.job_side.config(text=("Also running: " + ", ".join(self.side_jobs)) if self.side_jobs else "")
+        extra = W.SEND_STATUS["text"]
+        self.job_side.config(text=("Also running: " + ", ".join(self.side_jobs)
+                                   + (f" — {extra}" if extra else "")) if self.side_jobs else "")
         sending = any(k in self.BACKGROUND_JOBS for k in self.side_jobs)
         self.side_stop.config(text="■ Stop sending" if sending else "")
 
@@ -1000,6 +1002,9 @@ class App:
 
     # ---------------- queue pump ----------------
     def poll(self):
+        if self.side_jobs and getattr(self, "_last_side_text", None) != W.SEND_STATUS["text"]:
+            self._last_side_text = W.SEND_STATUS["text"]
+            self._side_label()
         try:
             while True:
                 item = self.q.get_nowait()

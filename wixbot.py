@@ -67,7 +67,7 @@ if getattr(sys, "frozen", False):          # running as WixLeadBot.exe
 else:
     HERE = os.path.dirname(os.path.abspath(__file__))
     BUNDLED = HERE
-VERSION = "1.7.8"
+VERSION = "1.7.9"
 # GitHub "owner/repo" whose Releases hold new versions of WixLeadBot.exe
 UPDATE_REPO = "awaisashraf1996/wix-lead-bot"
 
@@ -92,6 +92,14 @@ def wait_if_paused() -> None:
 
 
 SEND_STOP = threading.Event()   # stops background sending without stopping a search
+
+
+SEND_STATUS = {"text": ""}
+
+
+def send_status(text: str) -> None:
+    """Short line about background sending, shown under the progress bar."""
+    SEND_STATUS["text"] = text
 
 
 def send_stopped() -> bool:
