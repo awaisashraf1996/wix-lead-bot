@@ -558,6 +558,7 @@ class App:
         O.ON_WON = self._won_to_site
         self.root.after(4000, self.website_tick)
         self.root.after(90 * 1000, self.autopilot_tick)
+        self.root.after(3000, self.badge_tick)
         self.root.after(30 * 1000, self.marketing_tick)
         try:
             n = O.create_due_followups(self.db, self.cfg)
@@ -671,6 +672,27 @@ class App:
         y = self.root.winfo_rooty() + (self.root.winfo_height() - win.winfo_height()) // 3
         win.geometry(f"+{max(0, x)}+{max(0, y)}")
 
+    def badge_tick(self):
+        """Little count bubbles in the sidebar: drafts waiting / approved to send, and new replies."""
+        try:
+            b = getattr(self, "nav_badges", {})
+            d = self.db.q("SELECT COUNT(*) FROM messages WHERE status='draft'")[0][0]
+            a = self.db.q("SELECT COUNT(*) FROM messages WHERE status='approved'")[0][0]
+            r = self.db.q("SELECT COUNT(*) FROM replies WHERE kind NOT IN ('spam','inquiry') "
+                          "AND COALESCE(handled,0)=0")[0][0]
+            for key, n, col in (("outreach", d + a, TEAL), ("inbox", r, RED)):
+                w = b.get(key)
+                if not w:
+                    continue
+                if n:
+                    w.config(text=str(n), bg=col)
+                    w.pack(side="right", padx=(0, 10))
+                else:
+                    w.pack_forget()
+        except Exception:
+            pass
+        self.root.after(15000, self.badge_tick)
+
     def autopilot_tick(self):
         """Once a day while the app is open, if you turned Autopilot on."""
         s = O.settings(self.cfg)
@@ -767,6 +789,10 @@ class App:
             ic.pack(side="left", padx=(12, 4), pady=8)
             lb = tk.Label(row, text=text, bg=CARD, fg=TEXT, font=F(11), anchor="w", cursor="hand2")
             lb.pack(side="left", fill="x", expand=True)
+            badge = tk.Label(row, text="", bg=CARD, fg="white", font=F(8, "bold"), padx=6)
+            if key in ("outreach", "inbox"):
+                self.nav_badges = getattr(self, "nav_badges", {})
+                self.nav_badges[key] = badge
             for w in (row, ic, lb):
                 w.bind("<Button-1>", lambda e, k=key: self.show(k))
                 w.bind("<Enter>", lambda e, k=key: self._nav_hover(k, True))
@@ -2557,11 +2583,13 @@ class OutreachPage(Page):
         fb = tk.Frame(left.inner, bg=CARD)
         fb.pack(fill="x", pady=(0, 8))
         self.filter = tk.StringVar(value="draft")
-        for val, txt in (("draft", "Waiting for approval"), ("approved", "Approved"),
-                         ("sent", "Sent"), ("failed", "Failed"), ("cancelled", "Cancelled"),
-                         ("replies", "Replies")):
-            ttk.Radiobutton(fb, text=txt, value=val, variable=self.filter,
-                            command=self.fill).pack(side="left", padx=(0, 10))
+        self.tab_btns = {}
+        self.tab_names = {"draft": "Waiting for approval", "approved": "Approved", "sent": "Sent",
+                          "failed": "Failed", "cancelled": "Cancelled", "replies": "Replies"}
+        for val, txt in self.tab_names.items():
+            b = ttk.Radiobutton(fb, text=txt, value=val, variable=self.filter, command=self.fill)
+            b.pack(side="left", padx=(0, 10))
+            self.tab_btns[val] = b
         fr, self.tree = make_tree(left.inner, [("biz", "Business", 200), ("to", "To", 210),
                                                ("step", "Email", 70), ("date", "Date", 120)], height=18)
         fr.pack(fill="both", expand=True)
@@ -2612,6 +2640,7 @@ class OutreachPage(Page):
                                                        else "   ·   outside US business hours, approved emails wait")
         self.summary.config(text=f"Drafts: {c['_drafts']}   ·   Approved: {c['_approved']}   ·   "
                                  f"Sent today: {c['_sent_today']}/{O.daily_limit(self.db, self.app.cfg)}{hrs}")
+        self.update_tab_counts()
         problems = []
         if not S.get_secret(self.app.cfg, "smtp_password"):
             problems.append("connect your email account")
@@ -2628,7 +2657,22 @@ class OutreachPage(Page):
                 self.filter.set(m["status"] if m["status"] in ("draft", "approved", "sent", "failed", "cancelled") else "draft")
         self.fill(select)
 
+    def update_tab_counts(self):
+        """Show how many emails are in each tab, e.g. 'Approved (26)'."""
+        n = {st: c for st, c in self.db.q("SELECT status, COUNT(*) FROM messages GROUP BY status")}
+        n["replies"] = self.db.q("SELECT COUNT(*) FROM replies WHERE kind != 'spam'")[0][0]
+        new_r = self.db.q("SELECT COUNT(*) FROM replies WHERE kind != 'spam' AND COALESCE(handled,0)=0")[0][0]
+        for val, b in self.tab_btns.items():
+            label = f"{self.tab_names[val]} ({n.get(val, 0)})"
+            if val == "replies" and new_r:
+                label = f"{self.tab_names[val]} ({n['replies']} · {new_r} new)"
+            b.config(text=label)
+
     def fill(self, select=None):
+        try:
+            self.update_tab_counts()
+        except Exception:
+            pass
         self.tree.delete(*self.tree.get_children())
         if self.filter.get() == "replies":
             self.btn_approve.config(state="disabled")
@@ -2904,9 +2948,12 @@ class InboxPage(Page):
         top.pack(fill="x", pady=(0, 10))
         Btn(top, text="⟳  Refresh", style="Primary.TButton", command=self.load).pack(side="left")
         self.show_var = tk.StringVar(value="leads")
-        for val, lab in (("leads", "From my leads"), ("all", "Everything"), ("other", "Not from leads")):
-            ttk.Radiobutton(top, text=lab, value=val, variable=self.show_var,
-                            command=self.fill).pack(side="left", padx=(14, 0))
+        self.show_btns = {}
+        self.show_names = {"leads": "From my leads", "all": "Everything", "other": "Not from leads"}
+        for val, lab in self.show_names.items():
+            b = ttk.Radiobutton(top, text=lab, value=val, variable=self.show_var, command=self.fill)
+            b.pack(side="left", padx=(14, 0))
+            self.show_btns[val] = b
         self.status = tk.Label(top, bg=BG, fg=MUTED, font=F(9))
         self.status.pack(side="right")
         pw = ttk.Panedwindow(self.body, orient="horizontal")
@@ -2977,6 +3024,11 @@ class InboxPage(Page):
             who = m["name"] if m["name"] == m["from"] else f"{m['name']} <{m['from']}>"
             lead = names.get(m["lead"], m["lead"] or "") + (" (auto-reply)" if m["auto"] and m["lead"] else "")
             self.tree.insert("", "end", iid=str(i), tags=tags, values=(m["date"], who, m["subject"], lead or "—"))
+        n_unread_leads = sum(1 for m in self.items if m["lead"] and not m["auto"] and m["unread"])
+        cnt = {"leads": n_leads, "all": len(self.items), "other": len(self.items) - n_leads}
+        for val, b in self.show_btns.items():
+            extra = f" · {n_unread_leads} unread" if val == "leads" and n_unread_leads else ""
+            b.config(text=f"{self.show_names[val]} ({cnt[val]}{extra})")
         self.status.config(text=f"{len(self.items)} newest emails · {n_leads} from leads")
         if show == "leads" and not n_leads and self.items:
             self.text.delete("1.0", "end")
