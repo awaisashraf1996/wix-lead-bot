@@ -250,7 +250,12 @@ SPAM_RE = re.compile(
     r"web ?traffic|crypto|bitcoin|forex|loan|casino|viagra|cbd|investment opportunit|lead generation service|"
     r"we (can|will) (build|design|redesign) your|app development|outsourc|offshore|virtual assistant|"
     r"unsubscribe|opt.?out|whatsapp me|telegram|marketing services|press release|domain (name )?(for sale|expir)|"
-    r"buy (followers|likes)|youtube (views|subscribers)|instagram followers|\$\d+ (per|/) ?month",
+    r"buy (followers|likes)|youtube (views|subscribers)|instagram followers|\$\d+ (per|/) ?month|"
+    # people selling their own services to you
+    r"\bwe (offer|provide|specialize|specialise|help (businesses|companies|agencies))|our (team|agency|company|"
+    r"services|experts)|\bi('m| am) an? (expert|freelancer|developer|designer|seo|digital|marketing|web)|"
+    r"hire (me|us|our)|white.?label|partner with you|appointment setting|cold (email|calling) service|"
+    r"would you be (interested|open) (in|to) (our|a partnership|working with us)|free (trial|audit) of our",
     re.I)
 
 
@@ -267,7 +272,7 @@ def import_inquiries(db: W.DB, cfg) -> int:
     import outreach as O
     O.init(db)
     ai.init(db)
-    if db.get_kv("inq_cleanup_v2", "") != "1":
+    if db.get_kv("inq_cleanup_v3", "") != "1":
         # earlier versions counted inquiries as lead replies: undo that
         for key, kind, subj, snip in db.q("SELECT domain, kind, subject, snippet FROM replies "
                                           "WHERE snippet LIKE '[Website inquiry%'"):
@@ -278,7 +283,7 @@ def import_inquiries(db: W.DB, cfg) -> int:
                  ("spam" if spam else "inquiry", 1 if spam else 0, key))
             if spam:
                 db.x("UPDATE tasks SET done=1 WHERE domain=? AND kind='inquiry'", (key,))
-        db.set_kv("inq_cleanup_v2", "1")
+        db.set_kv("inq_cleanup_v3", "1")
     if db.get_kv("inq_cleanup_v1", "") != "1":
         # inquiries from personal mailboxes (proton.me, gmail...) are not company websites
         for (d,) in db.q("SELECT DISTINCT domain FROM businesses WHERE category='inquiry'"):
