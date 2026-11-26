@@ -453,6 +453,55 @@ def contact_today(db: W.DB, cfg, use_ai: bool, approve: bool, psi_key: str = "")
     return out
 
 
+def can_contact(db: W.DB, lead: dict) -> str:
+    """'' if this lead can get a first email now, else the reason why not."""
+    if not lead.get("emails"):
+        return "no email address"
+    if lead.get("no_solicit"):
+        return "their site says no sales emails"
+    st = (get_outreach(db, lead["domain"]) or {}).get("status", "new")
+    if st not in ("new", "draft"):
+        return "already contacted"
+    if is_suppressed(db, best_email(lead), lead["domain"]):
+        return "on your never-contact list"
+    return ""
+
+
+def contact_leads(db: W.DB, cfg, domains: list[str], use_ai: bool, approve: bool, psi_key: str = "") -> dict:
+    """Email the leads you picked: write (Gemini or template), approve if you said so,
+    and send. Sends today up to the daily limit; the rest stay approved for the next send."""
+    init(db)
+    out = {"drafted": 0, "approved": 0, "sent": 0, "skipped": 0, "queued": 0}
+    picked = [r for r in db.lead_records() if r["domain"] in set(domains)]
+    todo = [r for r in picked if not can_contact(db, r)]
+    out["skipped"] = len(domains) - len(todo)
+    for i, lead in enumerate(todo):
+        if W.send_stopped():
+            break
+        W.send_status(f"writing {i + 1} of {len(todo)}")
+        W.progress(phase="ai", done=i, total=len(todo), label=f"Writing to {lead.get('name') or lead['domain']}")
+        existing = db.q("SELECT id FROM messages WHERE domain=? AND step=1 AND status IN ('draft','approved')",
+                        (lead["domain"],))
+        mid = existing[0][0] if existing else None
+        if not mid:
+            try:
+                mid = ai_draft(db, cfg, lead, psi_key) if use_ai else make_draft(db, cfg, lead, 1)
+            except RuntimeError as e:
+                W.log(f"  {lead['domain']}: {e} (used the template instead)")
+                mid = make_draft(db, cfg, lead, 1)
+        if not mid:
+            continue
+        out["drafted"] += 1
+        if approve:
+            update_message(db, mid, status="approved")
+            out["approved"] += 1
+    W.send_status("")
+    if approve and out["approved"] and not W.send_stopped():
+        out["sent"] = send_approved(db, cfg)
+        out["queued"] = len(messages(db, "approved"))
+    return out
+
+
 def autopilot_day(db: W.DB, cfg, psi_key: str = "") -> dict:
     """Autopilot (only when you turned it on): today's follow-ups plus the next
     Super + Hot leads, approved and sent within the daily limit."""

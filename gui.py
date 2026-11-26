@@ -565,21 +565,39 @@ class App:
         except Exception:
             pass
 
-    def contact_dialog(self):
-        """One click: write, approve and send first emails to Super + Hot leads."""
+    def contact_dialog(self, domains=None):
+        """One click: write, approve and send first emails, to the leads you picked
+        (domains) or to all Super + Hot leads."""
         s = O.settings(self.cfg)
-        waiting = O.leads_to_contact(self.db)
+        picked, reasons = None, {}
+        if domains:
+            recs = {r["domain"]: r for r in self.db.lead_records()}
+            picked = [d for d in domains if d in recs and not O.can_contact(self.db, recs[d])]
+            for d in domains:
+                why = O.can_contact(self.db, recs[d]) if d in recs else "not a lead"
+                if why:
+                    reasons[why] = reasons.get(why, 0) + 1
+            waiting = len(picked)
+        else:
+            waiting = O.leads_to_contact(self.db)
         lim = O.daily_limit(self.db, self.cfg)
         room = max(0, lim - O.sent_today(self.db) - len(O.messages(self.db, "approved")))
         win = tk.Toplevel(self.root)
-        win.title("Contact Super + Hot leads")
+        title = (f"Email {len(domains)} selected lead{'s' if len(domains) != 1 else ''}" if domains
+                 else "Contact Super + Hot leads")
+        win.title(title)
         win.configure(bg=CARD)
         win.transient(self.root)
         win.grab_set()
         f = tk.Frame(win, bg=CARD)
         f.pack(padx=22, pady=18)
-        tk.Label(f, text="Contact Super + Hot leads", bg=CARD, fg=TEXT, font=F(13, "bold")).pack(anchor="w")
-        tk.Label(f, text=(f"{waiting} Super/Hot leads with an email haven't been contacted yet.\n"
+        tk.Label(f, text=title, bg=CARD, fg=TEXT, font=F(13, "bold")).pack(anchor="w")
+        if domains:
+            head = f"{waiting} of them can be emailed now." + "".join(
+                f"\n  · {n} skipped: {why}" for why, n in reasons.items()) + "\n"
+        else:
+            head = f"{waiting} Super/Hot leads with an email haven't been contacted yet.\n"
+        tk.Label(f, text=(head +
                           f"Today you can send {room} more (today's limit {lim}{' while warming up to ' + str(s['daily_limit']) if lim < int(s['daily_limit']) else ''}). The rest go "
                           "on the next days."), bg=CARD, fg=MUTED, font=F(10),
                  justify="left").pack(anchor="w", pady=(4, 12))
@@ -594,23 +612,25 @@ class App:
         mode = tk.StringVar(value="check")
         ttk.Radiobutton(f, text="Show me the emails first; I approve, then they send",
                         value="check", variable=mode).pack(anchor="w")
-        ttk.Radiobutton(f, text="Approve and send them for me now (slowly, in their business hours)",
+        ttk.Radiobutton(f, text="Approve and send them for me now (1–2 minutes apart)",
                         value="send", variable=mode).pack(anchor="w")
-        auto = tk.BooleanVar(value=bool(s.get("autopilot")))
-        ttk.Checkbutton(f, text="Autopilot: do this every day until everyone is contacted, and send their "
-                        "follow-ups too (while the app is open)", variable=auto).pack(anchor="w", pady=(10, 0))
+        auto = tk.BooleanVar(value=bool(s.get("autopilot")) and not domains)
+        if not domains:
+            ttk.Checkbutton(f, text="Autopilot: do this every day until everyone is contacted, and send their "
+                            "follow-ups too (while the app is open)", variable=auto).pack(anchor="w", pady=(10, 0))
         bb = tk.Frame(f, bg=CARD)
         bb.pack(fill="x", pady=(16, 0))
 
         def start():
             use_ai = writer.get() == "ai"
             send = mode.get() == "send" or auto.get()
-            out = dict(self.cfg.get("outreach", {}) or {})
-            out["autopilot"] = bool(auto.get())
-            out["autopilot_ai"] = use_ai
-            self.cfg.set("outreach", out)
-            self.cfg.save()
             on = bool(auto.get())
+            if not domains:
+                out = dict(self.cfg.get("outreach", {}) or {})
+                out["autopilot"] = on
+                out["autopilot_ai"] = use_ai
+                self.cfg.set("outreach", out)
+                self.cfg.save()
             win.destroy()
             if on:
                 self.db.set_kv("autopilot_last", dt.date.today().isoformat())
@@ -620,17 +640,25 @@ class App:
                 if not res:
                     return
                 if send:
-                    self.toast(f"{res['sent']} sent today." + (" Autopilot continues tomorrow." if on else ""),
-                               GREEN)
+                    left = res.get("queued", 0)
+                    self.toast(f"{res['sent']} sent." + (f" {left} more go out on your next send (daily limit)."
+                                                         if left else "")
+                               + (" Autopilot continues tomorrow." if on else ""), GREEN)
+                    self.refresh_page()
                 else:
                     self.toast(f"{res['drafted']} emails ready. Check them, click Approve all, then Send approved.")
                     self.show("outreach", view="draft")
-            self.run_job("Contacting leads", lambda: O.contact_today(self.db, self.cfg, use_ai, send, key),
-                         after=done)
+            if domains:
+                self.run_job("Contacting leads",
+                             lambda: O.contact_leads(self.db, self.cfg, picked, use_ai, send, key), after=done)
+            else:
+                self.run_job("Contacting leads", lambda: O.contact_today(self.db, self.cfg, use_ai, send, key),
+                             after=done)
         Btn(bb, text="Start", style="Primary.TButton", command=start).pack(side="right")
         Btn(bb, text="Cancel", command=win.destroy).pack(side="right", padx=8)
         if not waiting:
-            tk.Label(f, text="Nothing to do: find more leads first.", bg=CARD, fg=RED,
+            tk.Label(f, text="Nothing to send: " + ("none of these can be emailed." if domains
+                                                    else "find more leads first."), bg=CARD, fg=RED,
                      font=F(9, "bold")).pack(anchor="w")
         win.update_idletasks()
         x = self.root.winfo_rootx() + (self.root.winfo_width() - win.winfo_width()) // 2
@@ -1770,6 +1798,16 @@ class LeadsPage(Page):
         Btn(bar, text="Export CSV", command=self.export).pack(side="right")
         self.legend = tk.Frame(self.body, bg=BG)
         self.legend.pack(fill="x", pady=(0, 8))
+        act = tk.Frame(self.body, bg=BG)
+        act.pack(fill="x", pady=(0, 8))
+        Btn(act, text="☑  Select all", command=self.select_all).pack(side="left")
+        Btn(act, text="Clear", command=lambda: (self.tree.selection_set(()), self._sel_changed())).pack(
+            side="left", padx=6)
+        self.email_btn = Btn(act, text="✉  Email selected (0)", style="Primary.TButton",
+                             command=self.email_selected)
+        self.email_btn.pack(side="left", padx=(6, 0))
+        tk.Label(act, text="Tip: Ctrl+click or Shift+click to pick several leads.", bg=BG, fg=MUTED,
+                 font=F(9)).pack(side="left", padx=12)
 
         pw = ttk.PanedWindow(self.body, orient="horizontal")
         pw.pack(fill="both", expand=True)
@@ -1878,9 +1916,24 @@ class LeadsPage(Page):
                  font=F(9)).pack(side="left")
 
     def on_select(self, e=None):
+        self._sel_changed()
         d = self.tree.focus() or (self.tree.selection() or [None])[0]
         if d and d in self.records:
             self.profile.show(self.records[d])
+
+    def _sel_changed(self):
+        n = len(self.tree.selection())
+        self.email_btn.config(text=f"✉  Email selected ({n})")
+
+    def select_all(self):
+        self.tree.selection_set(self.tree.get_children())
+        self._sel_changed()
+
+    def email_selected(self):
+        sel = list(self.tree.selection())
+        if not sel:
+            return messagebox.showinfo("Email", "Pick one or more leads first (or click Select all).")
+        self.app.contact_dialog(sel)
 
     def export(self):
         rows = [self.records[i] for i in self.tree.get_children()]
@@ -2002,8 +2055,8 @@ class Profile:
 
         acts = tk.Frame(b, bg=CARD)
         acts.pack(fill="x", padx=18, pady=(14, 0))
-        Btn(acts, text="✉  Write email", style="Primary.TButton",
-                   command=self.draft).pack(side="left")
+        Btn(acts, text="✉  Email this lead", style="Primary.TButton",
+                   command=lambda: self.app.contact_dialog([lead["domain"]])).pack(side="left")
         Btn(acts, text="Website",
                    command=lambda: open_url(lead.get("final_url") or lead.get("website"))).pack(side="left", padx=6)
         Btn(acts, text="Call brief", command=self.open_brief).pack(side="left")
@@ -2013,6 +2066,7 @@ class Profile:
         menu.add_command(label="This is my client (never contact)", command=self.mark_client)
         menu.add_command(label="Copy email address", command=self.copy_email)
         menu.add_command(label="Send this email to me (see it as the client)", command=self.send_to_me)
+        menu.insert_command(0, label="Write the email myself (open a draft)", command=self.draft)
         menu.add_command(label="Copy short audit text", command=self.copy_audit)
         mb["menu"] = menu
         mb.pack(side="left", padx=6)
