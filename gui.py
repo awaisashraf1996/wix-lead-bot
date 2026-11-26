@@ -598,6 +598,9 @@ class App:
                 f"\n  · {n} skipped: {why}" for why, n in reasons.items()) + "\n"
         else:
             head = f"{waiting} Super/Hot leads with an email haven't been contacted yet.\n"
+        backlog = len(O.messages(self.db, "approved"))
+        if backlog:
+            head += f"{backlog} approved emails are already waiting to go out first.\n"
         tk.Label(f, text=(head +
                           f"Today you can send {room} more (today's limit {lim}{' while warming up to ' + str(s['daily_limit']) if lim < int(s['daily_limit']) else ''}). The rest go "
                           "on the next days."), bg=CARD, fg=MUTED, font=F(10),
@@ -644,6 +647,8 @@ class App:
                     left = res.get("queued", 0)
                     self.toast(f"{res['sent']} sent." + (f" {left} more go out on your next send (daily limit)."
                                                          if left else "")
+                               + (f" {res['later']} more will be written on the next days." if res.get("later")
+                                  else "")
                                + (" Autopilot continues tomorrow." if on else ""), GREEN)
                     self.refresh_page()
                 else:
@@ -1305,6 +1310,7 @@ class DashboardPage(Page):
 
     def refresh(self, **kw):
         db = self.db
+        O.fix_draft_status(db)
         recs = db.lead_records()
         c = O.counts(db)
         lv = {"super": 0, "hot": 0, "normal": 0}
@@ -2638,6 +2644,12 @@ class OutreachPage(Page):
                 self.tree.selection_set(kids[0])
                 self.tree.focus(kids[0])
                 self.on_select()
+            else:
+                self.cur_reply = None
+                self.to.set("")
+                self.subj.set("")
+                self.body_t.delete("1.0", "end")
+                self.body_t.insert("1.0", "No replies from leads yet.")
             return
         self.btn_answer.pack_forget()
         self.btn_spam.pack_forget()
@@ -2883,7 +2895,7 @@ class InboxPage(Page):
         pw = ttk.Panedwindow(self.body, orient="horizontal")
         pw.pack(fill="both", expand=True)
         lc = card(pw, pad=0)
-        fr, self.tree = make_tree(lc.inner, [("when", "When", 95), ("from", "From", 230),
+        fr, self.tree = make_tree(lc.inner, [("when", "When", 115), ("from", "From", 210),
                                              ("subject", "Subject", 300), ("lead", "Lead", 160)], height=20)
         fr.pack(fill="both", expand=True)
         self.tree.tag_configure("lead", background=LEVEL_TINT.get("super", CARD))

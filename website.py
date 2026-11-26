@@ -255,7 +255,9 @@ SPAM_RE = re.compile(
     r"\bwe (offer|provide|specialize|specialise|help (businesses|companies|agencies))|our (team|agency|company|"
     r"services|experts)|\bi('m| am) an? (expert|freelancer|developer|designer|seo|digital|marketing|web)|"
     r"hire (me|us|our)|white.?label|partner with you|appointment setting|cold (email|calling) service|"
-    r"would you be (interested|open) (in|to) (our|a partnership|working with us)|free (trial|audit) of our",
+    r"would you be (interested|open) (in|to) (our|a partnership|working with us)|free (trial|audit) of our|"
+    r"that'?s what we do|(see|book|watch) (the|a|our) demo|we (find|send|generate|book) (them|leads|you)|"
+    r"\bfreelance (web|seo|developer|designer)|done.for.you|no (hiring|cold calling)",
     re.I)
 
 
@@ -272,7 +274,7 @@ def import_inquiries(db: W.DB, cfg) -> int:
     import outreach as O
     O.init(db)
     ai.init(db)
-    if db.get_kv("inq_cleanup_v3", "") != "1":
+    if db.get_kv("inq_cleanup_v4", "") != "1":
         # earlier versions counted inquiries as lead replies: undo that
         for key, kind, subj, snip in db.q("SELECT domain, kind, subject, snippet FROM replies "
                                           "WHERE snippet LIKE '[Website inquiry%'"):
@@ -283,7 +285,7 @@ def import_inquiries(db: W.DB, cfg) -> int:
                  ("spam" if spam else "inquiry", 1 if spam else 0, key))
             if spam:
                 db.x("UPDATE tasks SET done=1 WHERE domain=? AND kind='inquiry'", (key,))
-        db.set_kv("inq_cleanup_v3", "1")
+        db.set_kv("inq_cleanup_v4", "1")
     if db.get_kv("inq_cleanup_v1", "") != "1":
         # inquiries from personal mailboxes (proton.me, gmail...) are not company websites
         for (d,) in db.q("SELECT DISTINCT domain FROM businesses WHERE category='inquiry'"):

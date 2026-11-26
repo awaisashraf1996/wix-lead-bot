@@ -9,6 +9,7 @@ import datetime as dt
 import email.utils
 import imaplib
 import random
+import json
 import re
 import smtplib
 import ssl
@@ -453,6 +454,26 @@ def contact_today(db: W.DB, cfg, use_ai: bool, approve: bool, psi_key: str = "")
     return out
 
 
+def fix_draft_status(db: W.DB) -> int:
+    """Leads marked 'Draft ready' whose draft no longer exists go back to New."""
+    init(db)
+    rows = db.q("SELECT o.domain FROM outreach o WHERE o.status='draft' AND NOT EXISTS ("
+                "SELECT 1 FROM messages m WHERE m.domain=o.domain AND m.status IN ('draft','approved'))")
+    for (d,) in rows:
+        db.x("UPDATE outreach SET status='new' WHERE domain=?", (d,))
+    return len(rows)
+
+
+PICK_QUEUE = "pick_queue"
+
+
+def queued_picks(db: W.DB) -> list[str]:
+    try:
+        return json.loads(db.get_kv(PICK_QUEUE, "[]") or "[]")
+    except ValueError:
+        return []
+
+
 def can_contact(db: W.DB, lead: dict) -> str:
     """'' if this lead can get a first email now, else the reason why not."""
     if not lead.get("emails"):
@@ -475,6 +496,18 @@ def contact_leads(db: W.DB, cfg, domains: list[str], use_ai: bool, approve: bool
     picked = [r for r in db.lead_records() if r["domain"] in set(domains)]
     todo = [r for r in picked if not can_contact(db, r)]
     out["skipped"] = len(domains) - len(todo)
+    if use_ai:
+        # Gemini writes about one a minute and the free plan allows a few hundred a day:
+        # write what the next sends need now, keep the rest in a queue for later days.
+        cap = max(25, daily_limit(db, cfg) * 2)
+        later = [r["domain"] for r in todo[cap:]]
+        todo = todo[:cap]
+        if later:
+            q = [d for d in queued_picks(db) if d not in later] + later
+            db.set_kv(PICK_QUEUE, json.dumps(q))
+            out["later"] = len(later)
+            W.log(f"  {len(later)} more picked leads will be written on the next days (Autopilot or "
+                  "Contact Super + Hot continues them).")
     for i, lead in enumerate(todo):
         if W.send_stopped():
             break
@@ -509,6 +542,13 @@ def autopilot_day(db: W.DB, cfg, psi_key: str = "") -> dict:
     s = settings(cfg)
     fu_before = {m["id"] for m in messages(db)}
     create_due_followups(db, cfg)
+    q = queued_picks(db)
+    if q:                                           # leads you picked earlier come first
+        room = max(1, daily_limit(db, cfg) - sent_today(db))
+        now_, rest = q[:room], q[room:]
+        db.set_kv(PICK_QUEUE, json.dumps(rest))
+        contact_leads(db, cfg, now_, use_ai=ai.enabled(cfg) and s.get("autopilot_ai", True), approve=True,
+                      psi_key=psi_key)
     for m in messages(db, "draft"):
         if m["id"] not in fu_before and m["step"] > 1:
             update_message(db, m["id"], status="approved")
