@@ -555,6 +555,15 @@ class App:
             out["_send_anytime_v1"] = True
             self.cfg.set("outreach", out)
             self.cfg.save()
+        if not self.db.get_kv("netfail_fix_v1", ""):
+            try:
+                r = O.fix_network_failures(self.db)
+                if r["to_draft"] or r["duplicates"]:
+                    self.toast(f"{r['to_draft']} emails that failed because the internet dropped are back in "
+                               f"'Waiting for approval'" + (f"; {r['duplicates']} duplicates removed" if r["duplicates"] else ""))
+            except Exception:
+                pass
+            self.db.set_kv("netfail_fix_v1", "1")
         if not self.db.get_kv("campaigns_v1", ""):
             # emails written before campaigns existed: keep them visible as one campaign
             rows = self.db.q("SELECT id FROM messages WHERE campaign_id IS NULL")
@@ -2749,13 +2758,26 @@ class OutreachPage(Page):
         self.tab_names = {"campaigns": "Campaigns", "draft": "Waiting for approval", "approved": "Approved", "sent": "Sent",
                           "failed": "Failed", "cancelled": "Cancelled", "replies": "Replies"}
         for val, txt in self.tab_names.items():
-            b = ttk.Radiobutton(fb, text=txt, value=val, variable=self.filter, command=self.fill)
+            b = ttk.Radiobutton(fb, text=txt, value=val, variable=self.filter,
+                                command=lambda: (self.fill(), self._sel_count()))
             b.pack(side="left", padx=(0, 10))
             self.tab_btns[val] = b
         fr, self.tree = make_tree(left.inner, [("biz", "Business", 200), ("to", "To", 210),
                                                ("step", "Email", 70), ("date", "Date", 120)], height=18)
         fr.pack(fill="both", expand=True)
         self.tree.bind("<<TreeviewSelect>>", self.on_select)
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self._sel_count(), add="+")
+        selbar = tk.Frame(left.inner, bg=CARD)
+        selbar.pack(fill="x", pady=(8, 0))
+        Btn(selbar, text="Select all", command=self.select_all).pack(side="left")
+        Btn(selbar, text="Clear", command=lambda: (self.tree.selection_set(()), self._sel_count())).pack(
+            side="left", padx=6)
+        self.sel_hint = tk.Label(selbar, text="Tip: Ctrl+click or Shift+click to pick several", bg=CARD,
+                                 fg=MUTED, font=F(8))
+        self.sel_hint.pack(side="left", padx=6)
+        self.btn_send_sel = Btn(selbar, text="📤  Send selected now", style="Primary.TButton",
+                                command=self.send_selected)
+        self.btn_send_sel.pack(side="right")
         right = card(mid, "Email", pad=14)
         right.pack(side="left", fill="both", expand=True, padx=(12, 0))
         r = right.inner
@@ -2821,6 +2843,7 @@ class OutreachPage(Page):
             if m:
                 self.filter.set(m["status"] if m["status"] in ("draft", "approved", "sent", "failed", "cancelled") else "draft")
         self.fill(select)
+        self._sel_count()
 
     def update_tab_counts(self):
         """Show how many emails are in each tab, e.g. 'Approved (26)'."""
@@ -2890,7 +2913,9 @@ class OutreachPage(Page):
         for m in O.messages(self.db, self.filter.get()):
             self.tree.insert("", "end", iid=str(m["id"]), values=(
                 self.names.get(m["domain"], m["domain"]), m["to_addr"],
-                ["", "First", "Follow-up 1", "Follow-up 2", "Last"][m["step"]] if m["step"] <= 4 else m["step"],
+                ("No internet" if O.NET_ERR_RE.search(m.get("error") or "") else "See reason")
+                if m["status"] == "failed" else
+                ["Again", "First", "Follow-up 1", "Follow-up 2", "Last"][m["step"]] if m["step"] <= 4 else "Check-back",
                 (m["sent_at"] or m["created_at"] or "")[:16].replace("T", " ")))
         kids = self.tree.get_children()
         sel = str(select) if select and self.tree.exists(str(select)) else (kids[0] if kids else None)
@@ -2938,10 +2963,62 @@ class OutreachPage(Page):
         self.body_t.insert("1.0", m["body"])
         import json as _json
         atts = _json.loads(m.get("attachments") or "[]")
-        self.att_lbl.config(text=("Attached: " + ", ".join(os.path.basename(a) for a in atts)) if atts else "")
+        self.att_lbl.config(text=("Attached: " + ", ".join(os.path.basename(a) for a in atts)) if atts else "",
+                            fg=MUTED)
+        if m["status"] in ("failed", "cancelled") and m.get("error"):
+            self.att_lbl.config(text=("Why it failed: " if m["status"] == "failed" else "Why skipped: ")
+                                + O.explain_error(m["error"]), fg=RED)
+        elif m["status"] == "sent" and m.get("sent_at"):
+            sig = O.lead_signals(self.db, m["domain"])
+            self.att_lbl.config(text="Sent " + m["sent_at"][:16].replace("T", " ") + "".join(
+                f"  ·  {t}" for t, on in (("opened their review", sig["opened"]), ("replied", sig["replied"]),
+                                          ("bounced", sig["bounced"])) if on), fg=GREEN)
         editable = m["status"] in ("draft", "approved", "failed")
         self.btn_approve.config(state="normal" if m["status"] in ("draft", "failed") else "disabled")
         self.body_t.config(state="normal" if editable else "disabled")
+
+    def _sel_ids(self):
+        return [int(i) for i in self.tree.selection() if i.isdigit()]
+
+    def _sel_count(self):
+        n = len(self._sel_ids())
+        tab = self.filter.get()
+        ok = tab in ("draft", "approved", "failed", "sent", "cancelled")
+        verb = {"failed": "Try again", "sent": "Send again"}.get(tab, "Send now")
+        self.btn_send_sel.config(text=f"📤  {verb}: selected ({n})" if n else f"📤  {verb}: pick emails",
+                                 state="normal" if ok and n else "disabled")
+        if ok:
+            self.btn_send_sel.pack(side="right")
+        else:
+            self.btn_send_sel.pack_forget()
+
+    def select_all(self):
+        kids = [k for k in self.tree.get_children() if k.isdigit()]
+        self.tree.selection_set(kids)
+        self._sel_count()
+
+    def send_selected(self):
+        ids = self._sel_ids()
+        if not ids:
+            return
+        self.save(quiet=True)
+        tab = self.filter.get()
+        room = max(0, O.daily_limit(self.db, self.app.cfg) - O.sent_today(self.db))
+        extra = ""
+        if tab == "sent":
+            extra = "\n\nThese were already sent once: each lead gets the same email again."
+        if len(ids) > room:
+            extra += (f"\n\nToday {room} more can go out (daily limit). The other {len(ids) - room} "
+                      "go out by themselves on the next days.")
+        if not messagebox.askyesno("Send now", f"Send {len(ids)} selected email{'s' if len(ids) != 1 else ''} now?"
+                                   f" They go out 1–2 minutes apart, in the background.{extra}"):
+            return
+        self.app.run_job("Sending emails", lambda: O.send_selected(self.db, self.app.cfg, list(ids)),
+                         after=lambda r: r and (self.app.toast(f"{r['sent']} sent" + (
+                             f", {r['waiting']} go out on the next days" if r["waiting"] else ""), GREEN),
+                             self.refresh()))
+        self.app.toast(f"Sending {len(ids)} emails in the background…")
+        self.refresh()
 
     def show_campaign(self, cid):
         """What happened to every email in this campaign."""

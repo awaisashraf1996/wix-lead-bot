@@ -1089,6 +1089,67 @@ def _with_audit_page(db: W.DB, cfg, msg: dict) -> dict:
     return msg
 
 
+NET_ERR_RE = re.compile(r"getaddrinfo|Name or service not known|timed out|Network is unreachable|"
+                        r"Connection (refused|reset|aborted)|No route to host|temporary failure|"
+                        r"Errno 1100[14]|WinError 100(5[0-9]|6[0-9])|EOF occurred", re.I)
+
+
+def is_network_error(e) -> bool:
+    if isinstance(e, smtplib.SMTPRecipientsRefused) or isinstance(e, smtplib.SMTPResponseException):
+        return False
+    return isinstance(e, (OSError, smtplib.SMTPServerDisconnected, smtplib.SMTPConnectError)) and \
+        bool(NET_ERR_RE.search(str(e))) or isinstance(e, (TimeoutError, ConnectionError))
+
+
+def explain_error(err: str) -> str:
+    """Plain-English reason for a failed email."""
+    e = err or ""
+    if NET_ERR_RE.search(e):
+        return "Internet or mail server connection dropped while sending. The email itself is fine: send it again."
+    if re.search(r"5\.1\.1|user unknown|does not exist|no such user|recipient.*rejected|address rejected", e, re.I):
+        return "This email address doesn't exist (the mail server rejected it)."
+    if re.search(r"5\.4\.5|quota|limit exceeded|too many", e, re.I):
+        return "Your email provider's daily sending limit was reached. Try again tomorrow."
+    if re.search(r"5\.7\.|spam|blocked|policy|reputation", e, re.I):
+        return "The receiving server blocked it (spam filter or policy)."
+    if re.search(r"auth|password|login", e, re.I):
+        return "Email login failed: check the app password in Settings."
+    return e[:200] or "Unknown error"
+
+
+def fix_network_failures(db: W.DB) -> dict:
+    """Once: emails that 'failed' only because the internet dropped. If the lead already has
+    a newer draft or email, the old copy is cancelled; otherwise it goes back to Waiting for approval."""
+    init(db)
+    out = {"to_draft": 0, "duplicates": 0}
+    for mid, dom, step, err in db.q("SELECT id, domain, step, error FROM messages WHERE status='failed'"):
+        if not NET_ERR_RE.search(err or ""):
+            continue
+        newer = db.q("SELECT 1 FROM messages WHERE domain=? AND step=? AND id!=? AND status IN "
+                     "('draft','approved','sent')", (dom, step, mid))
+        if newer:
+            update_message(db, mid, status="cancelled", error="duplicate: this lead has a newer email")
+            out["duplicates"] += 1
+        else:
+            update_message(db, mid, status="draft", error=None)
+            out["to_draft"] += 1
+    return out
+
+
+def send_selected(db: W.DB, cfg, ids: list[int]) -> dict:
+    """Send now: works for drafts, approved, failed (try again) and already-sent (send again)."""
+    init(db)
+    for mid in ids:
+        m = db.q("SELECT status FROM messages WHERE id=?", (mid,))
+        if m and m[0][0] == "sent":
+            # send again as a fresh copy, keep the original in Sent
+            db.x("INSERT INTO messages (domain, step, to_addr, subject, body, status, created_at, attachments, "
+                 "campaign_id) SELECT domain, 0, to_addr, subject, body, 'draft', ?, attachments, campaign_id "
+                 "FROM messages WHERE id=?", (W.now(), mid))
+            ids[ids.index(mid)] = db.q("SELECT MAX(id) FROM messages")[0][0]
+    return send_now(db, cfg, ids)
+
+
 def send_approved(db: W.DB, cfg, only_ids=None) -> int:
     """Send approved emails, slowly, up to the daily limit. Uses the app's
     Pause/Stop buttons. only_ids: send just these (Send now). Returns how many were sent."""
@@ -1107,6 +1168,7 @@ def send_approved(db: W.DB, cfg, only_ids=None) -> int:
     W.log(f"\nSending {len(queue)} approved emails (limit today {limit}"
           + (f", warming up to {s['daily_limit']}" if limit < int(s['daily_limit']) else "") + ")...")
     sent = 0
+    net_fails = 0
     srv = None
     pending = list(queue)
     i = -1
@@ -1145,6 +1207,10 @@ def send_approved(db: W.DB, cfg, only_ids=None) -> int:
             if msg["step"] > 1 and msg["step"] != 5 and st.get("status") != "emailed":
                 update_message(db, msg["id"], status="cancelled", error="lead status changed")
                 continue
+            if msg["step"] == 1 and db.q("SELECT 1 FROM messages WHERE domain=? AND step=1 AND status='sent' "
+                                         "AND id!=?", (msg["domain"], msg["id"])):
+                update_message(db, msg["id"], status="cancelled", error="this lead already got its first email")
+                continue
             if msg["step"] == 1:
                 msg = _with_audit_page(db, cfg, msg)
             W.progress(phase="send", done=i, total=len(queue), label=f"Sending to {msg['to_addr']}")
@@ -1159,12 +1225,29 @@ def send_approved(db: W.DB, cfg, only_ids=None) -> int:
                     srv = _smtp(cfg)          # the connection timed out while we waited: reconnect once
                     srv.send_message(em)
             except (smtplib.SMTPException, OSError) as e:
-                update_message(db, msg["id"], status="failed", error=str(e)[:300])
-                W.log(f"  FAILED {msg['to_addr']}: {e}")
                 srv = None
                 if isinstance(e, smtplib.SMTPAuthenticationError):
                     raise RuntimeError("Email login failed. Check the app password in Settings.")
+                if is_network_error(e):
+                    # internet dropped: this email is fine, keep it and wait for the connection
+                    pending.insert(0, msg)
+                    i -= 1
+                    net_fails += 1
+                    if net_fails > 6:
+                        W.log("  No internet for a while: stopped. The rest stay approved and go out "
+                              "on your next send.")
+                        break
+                    W.log(f"  No connection to the mail server ({e}). Trying again in "
+                          f"{30 * net_fails} seconds...")
+                    W.send_status(f"{sent} sent · waiting for the internet to come back")
+                    end = time.time() + 30 * net_fails
+                    while time.time() < end and not W.send_stopped():
+                        time.sleep(0.5)
+                    continue
+                update_message(db, msg["id"], status="failed", error=str(e)[:300])
+                W.log(f"  FAILED {msg['to_addr']}: {explain_error(str(e))}")
                 continue
+            net_fails = 0
             stamp = W.now()
             update_message(db, msg["id"], status="sent", sent_at=stamp, msgid=em["Message-ID"])
             if msg["step"] == 0:          # an answer to their reply: keep the status
