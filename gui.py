@@ -185,7 +185,7 @@ class Btn(tk.Canvas):
         self.bind("<Enter>", lambda e: self._set_hover(True))
         self.bind("<Leave>", lambda e: self._set_hover(False))
         self.bind("<ButtonRelease-1>", self._click)
-        self.bind("<Configure>", lambda e: self._draw())
+        self.bind("<Configure>", lambda e: self._draw(e.width))
         self._size()
         self._draw()
 
@@ -203,11 +203,13 @@ class Btn(tk.Canvas):
             w = max(w, int(self._wchars * self.font.measure("0") + 24))
         super().configure(width=w)
 
-    def _draw(self):
+    def _draw(self, width=None):
         self.delete("all")
-        w = max(self.winfo_width(), int(float(self.cget("width")))) if self.winfo_ismapped() else int(float(self.cget("width")))
-        w = self.winfo_width() if self.winfo_ismapped() and self.winfo_width() > 10 else w
-        h, r = 34, 8
+        if width and width > 10:
+            self._bw = width
+        w = getattr(self, "_bw", 0) or (self.winfo_width() if self.winfo_width() > 10 else int(float(self.cget("width"))))
+        h = max(34, self.winfo_height() if self.winfo_height() > 10 else 34)
+        r = 8
         fill, _, fg = self._colors()
         pts = [r, 1, w - r, 1, w - 1, 1, w - 1, r, w - 1, h - r, w - 1, h - 1, w - r, h - 1, r, h - 1,
                1, h - 1, 1, h - r, 1, r, 1, 1]
@@ -463,10 +465,27 @@ class App:
             self.login_frame = None
             self.open_main()
 
-        Btn(b, text="Create password and start" if first else "Unlock",
-                   style="Primary.TButton", command=go).pack(fill="x", pady=(8, 0))
-        e1.bind("<Return>", go)
+        showv = tk.BooleanVar(value=False)
+        opts = tk.Frame(b, bg=CARD)
+        opts.pack(fill="x", pady=(0, 4))
+        ttk.Checkbutton(opts, text="Show password", variable=showv,
+                        command=lambda: e1.config(show="" if showv.get() else "•")).pack(side="left")
+        caps = tk.Label(opts, text="", bg=CARD, fg=AMBER, font=F(9, "bold"))
+        caps.pack(side="right")
+
+        def caps_check(e):
+            try:
+                caps.config(text="⇪ Caps Lock is on" if e.state & 0x2 else "")
+            except Exception:
+                pass
+        e1.bind("<KeyRelease>", caps_check, add="+")
+        ub = Btn(b, text="Create password and start  →" if first else "🔓  Unlock",
+                 style="Primary.TButton", command=go)
+        ub.pack(fill="x", pady=(12, 0), ipady=4)
+        f.bind_all("<Return>", go)
+        f.bind("<Destroy>", lambda e: e.widget is f and self.root.unbind_all("<Return>"))
         e1.focus_set()
+        self.root.after(200, e1.focus_force)
 
     def lock(self):
         if self.job and self.job.is_alive():
@@ -2755,65 +2774,84 @@ class OutreachPage(Page):
         fb.pack(fill="x", pady=(0, 8))
         self.filter = tk.StringVar(value="campaigns")
         self.tab_btns = {}
-        self.tab_names = {"campaigns": "Campaigns", "draft": "Waiting for approval", "approved": "Approved", "sent": "Sent",
+        self.tab_names = {"campaigns": "Campaigns", "draft": "To approve", "approved": "Approved", "sent": "Sent",
                           "failed": "Failed", "cancelled": "Cancelled", "replies": "Replies"}
         for val, txt in self.tab_names.items():
             b = ttk.Radiobutton(fb, text=txt, value=val, variable=self.filter,
                                 command=lambda: (self.fill(), self._sel_count()))
-            b.pack(side="left", padx=(0, 10))
             self.tab_btns[val] = b
-        fr, self.tree = make_tree(left.inner, [("biz", "Business", 200), ("to", "To", 210),
-                                               ("step", "Email", 70), ("date", "Date", 120)], height=18)
-        fr.pack(fill="both", expand=True)
-        self.tree.bind("<<TreeviewSelect>>", self.on_select)
-        self.tree.bind("<<TreeviewSelect>>", lambda e: self._sel_count(), add="+")
-        selbar = tk.Frame(left.inner, bg=CARD)
-        selbar.pack(fill="x", pady=(8, 0))
-        Btn(selbar, text="Select all", command=self.select_all).pack(side="left")
-        Btn(selbar, text="Clear", command=lambda: (self.tree.selection_set(()), self._sel_count())).pack(
-            side="left", padx=6)
-        self.sel_hint = tk.Label(selbar, text="Tip: Ctrl+click or Shift+click to pick several", bg=CARD,
-                                 fg=MUTED, font=F(8))
+        fb.bind("<Configure>", lambda e: self._wrap_tabs(e.width))
+        self._wrap_tabs(900)
+        # selection bar first, at the bottom, so it is always visible
+        selbar = tk.Frame(left.inner, bg=SOFT, highlightthickness=1, highlightbackground=BORDER)
+        selbar.pack(side="bottom", fill="x", pady=(8, 0))
+        sb = tk.Frame(selbar, bg=SOFT)
+        sb.pack(fill="x", padx=8, pady=6)
+        Btn(sb, text="☑  Select all", command=self.select_all).pack(side="left")
+        Btn(sb, text="Clear", command=self.clear_sel).pack(side="left", padx=6)
+        self.sel_hint = tk.Label(sb, text="", bg=SOFT, fg=MUTED, font=F(9))
         self.sel_hint.pack(side="left", padx=6)
-        self.btn_send_sel = Btn(selbar, text="📤  Send selected now", style="Primary.TButton",
+        self.btn_send_sel = Btn(sb, text="📤  Send selected", style="Primary.TButton",
                                 command=self.send_selected)
         self.btn_send_sel.pack(side="right")
-        right = card(mid, "Email", pad=14)
-        right.pack(side="left", fill="both", expand=True, padx=(12, 0))
+        self.btn_approve_all = Btn(sb, text="✓  Approve all", command=self.approve_all)
+        fr, self.tree = make_tree(left.inner, [("chk", "", 34), ("biz", "Business", 170), ("to", "To", 190),
+                                               ("step", "Email", 80), ("date", "Date", 110)], height=18)
+        self.tree.column("chk", width=34, minwidth=34, stretch=False, anchor="center")
+        self.tree.heading("chk", text="☐", command=self.toggle_all)
+        fr.pack(fill="both", expand=True)
+        self.tree.bind("<Button-1>", self._tick_click, add="+")
+        self.tree.bind("<<TreeviewSelect>>", self.on_select)
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self._sel_count(), add="+")
+        right = card(mid, None, pad=14)
+        right.pack(side="right", fill="both", expand=True, padx=(12, 0), before=left)
         r = right.inner
+        head = tk.Frame(r, bg=CARD)
+        head.pack(fill="x")
+        tk.Label(head, text="Email", bg=CARD, fg=TEXT, font=F(12, "bold")).pack(side="left")
+        tools = tk.Frame(head, bg=CARD)
+        tools.pack(side="right")
+        Btn(tools, text="👁  Preview", command=self.preview).pack(side="left")
+        Btn(tools, text="📎  Attach", command=self.attach).pack(side="left", padx=6)
+        Btn(tools, text="👤  Profile", command=self.profile).pack(side="left")
         self.to = tk.StringVar()
         self.subj = tk.StringVar()
         row = tk.Frame(r, bg=CARD)
-        row.pack(fill="x", pady=(8, 4))
+        row.pack(fill="x", pady=(12, 4))
         tk.Label(row, text="To", bg=CARD, fg=MUTED, width=8, anchor="w").pack(side="left")
         ttk.Entry(row, textvariable=self.to).pack(side="left", fill="x", expand=True)
         row = tk.Frame(r, bg=CARD)
         row.pack(fill="x", pady=4)
         tk.Label(row, text="Subject", bg=CARD, fg=MUTED, width=8, anchor="w").pack(side="left")
         ttk.Entry(row, textvariable=self.subj).pack(side="left", fill="x", expand=True)
-        self.body_t = tk.Text(r, wrap="word", font=F(10), relief="flat", padx=10, pady=8,
-                              highlightthickness=1, highlightbackground=BORDER, height=16)
-        self.body_t.pack(fill="both", expand=True, pady=(6, 8))
-        self.att_lbl = tk.Label(r, bg=CARD, fg=MUTED, font=F(8), anchor="w")
-        self.att_lbl.pack(fill="x")
-        br = tk.Frame(r, bg=CARD)
-        br.pack(fill="x")
-        self.btn_approve = Btn(br, text="✓  Approve", style="Primary.TButton", command=self.approve)
-        self.btn_approve.pack(side="left")
-        Btn(br, text="📤  Send now", command=self.send_now).pack(side="left", padx=(6, 0))
-        Btn(br, text="Save", command=self.save).pack(side="left", padx=6)
-        Btn(br, text="Skip", command=lambda: self.set_selected("cancelled")).pack(side="left")
-        Btn(br, text="Approve all", command=self.approve_all).pack(side="right")
+        # status line: why it failed / when it was sent / attachments
+        self.att_lbl = tk.Label(r, bg=CARD, fg=MUTED, font=F(9, "bold"), anchor="w", justify="left",
+                                padx=10, pady=6)
+        self.att_lbl.pack(fill="x", pady=(6, 0))
+        # action bar at the bottom: always visible
+        bar = tk.Frame(r, bg=CARD)
+        bar.pack(side="bottom", fill="x", pady=(10, 0))
+        tk.Frame(r, bg=BORDER, height=1).pack(side="bottom", fill="x", pady=(10, 0))
+        br = self.left_acts = tk.Frame(bar, bg=CARD)
+        br.pack(side="left")
+        self.btn_skip = Btn(br, text="✕  Skip", command=lambda: self.set_selected("cancelled"))
+        self.btn_skip.pack(side="left")
+        self.btn_save = Btn(br, text="💾  Save", command=self.save)
+        self.btn_save.pack(side="left", padx=6)
         self.btn_answer = Btn(br, text="✎  Draft an answer", style="Dark.TButton", command=self.answer)
         self.btn_spam = Btn(br, text="🚫  Spam", command=self.mark_spam)
-        self.btn_campaign = Btn(br, text="📤  Review and send", style="Dark.TButton",
+        acts = tk.Frame(bar, bg=CARD)
+        acts.pack(side="right")
+        self.btn_approve = Btn(acts, text="✓  Approve", style="Dark.TButton", command=self.approve)
+        self.btn_approve.pack(side="left", padx=(0, 6))
+        self.btn_send1 = Btn(acts, text="📤  Send now", style="Primary.TButton", command=self.send_now, width=14)
+        self.btn_send1.pack(side="left")
+        self.btn_campaign = Btn(acts, text="📤  Review and send", style="Primary.TButton",
                                 command=lambda: self.cur_campaign and self.app.review_batch(self.cur_campaign))
         self.cur_campaign = None
-        br2 = tk.Frame(r, bg=CARD)
-        br2.pack(fill="x", pady=(8, 0))
-        Btn(br2, text="👁  Preview", command=self.preview).pack(side="left")
-        Btn(br2, text="📎  Attach", command=self.attach).pack(side="left", padx=6)
-        Btn(br2, text="Open profile", command=self.profile).pack(side="left")
+        self.body_t = tk.Text(r, wrap="word", font=F(10), relief="flat", padx=12, pady=10, width=44,
+                              highlightthickness=1, highlightbackground=BORDER, height=16)
+        self.body_t.pack(fill="both", expand=True, pady=(8, 0))
 
         self.cur = None
         self.names = {}
@@ -2863,15 +2901,12 @@ class OutreachPage(Page):
         except Exception:
             pass
         self.tree.delete(*self.tree.get_children())
-        self.btn_campaign.pack_forget()
         if self.filter.get() == "campaigns":
-            self.btn_answer.pack_forget()
-            self.btn_spam.pack_forget()
-            self.btn_approve.config(state="disabled")
+            self._email_buttons("none")
             for c in O.campaign_stats(self.db):
                 waiting = c["draft"] + c["approved"]
                 self.tree.insert("", "end", iid=f"c{c['id']}", values=(
-                    c["name"], f"Sent {c['sent']}/{c['total']}" + (f" · {waiting} waiting" if waiting else "")
+                    "", c["name"], f"Sent {c['sent']}/{c['total']}" + (f" · {waiting} waiting" if waiting else "")
                     + (f" · {c['failed']} failed" if c["failed"] else ""),
                     f"👁{c['opened']} ↩{c['replied']}", (c["created"] or "")[:16].replace("T", " ")))
             kids = self.tree.get_children()
@@ -2887,14 +2922,12 @@ class OutreachPage(Page):
                                           "'Email selected', then Send. Or click 'Contact Super + Hot'.")
             return
         if self.filter.get() == "replies":
-            self.btn_approve.config(state="disabled")
-            self.btn_answer.pack(side="left", padx=6)
-            self.btn_spam.pack(side="left")
+            self._email_buttons("reply")
             for rid, dom, frm, subj, kind, when, handled in self.db.q(
                     "SELECT id, domain, from_addr, subject, kind, received_at, handled FROM replies "
                     "WHERE kind != 'spam' ORDER BY id DESC"):
                 self.tree.insert("", "end", iid=f"r{rid}", values=(
-                    self.names.get(dom, dom), frm, ai.REPLY_KINDS.get(kind, kind) + (" ✓" if handled else ""),
+                    "", self.names.get(dom, dom), frm, ai.REPLY_KINDS.get(kind, kind) + (" ✓" if handled else ""),
                     (when or "")[:16].replace("T", " ")))
             kids = self.tree.get_children()
             if kids:
@@ -2908,11 +2941,9 @@ class OutreachPage(Page):
                 self.body_t.delete("1.0", "end")
                 self.body_t.insert("1.0", "No replies from leads yet.")
             return
-        self.btn_answer.pack_forget()
-        self.btn_spam.pack_forget()
         for m in O.messages(self.db, self.filter.get()):
             self.tree.insert("", "end", iid=str(m["id"]), values=(
-                self.names.get(m["domain"], m["domain"]), m["to_addr"],
+                "☐", self.names.get(m["domain"], m["domain"]), m["to_addr"],
                 ("No internet" if O.NET_ERR_RE.search(m.get("error") or "") else "See reason")
                 if m["status"] == "failed" else
                 ["Again", "First", "Follow-up 1", "Follow-up 2", "Last"][m["step"]] if m["step"] <= 4 else "Check-back",
@@ -2952,6 +2983,7 @@ class OutreachPage(Page):
             self.body_t.insert("1.0", f"[{ai.REPLY_KINDS.get(kind, kind)}]\n\n{snip}")
             self.body_t.config(state="disabled")
             self.att_lbl.config(text="")
+            self._att_vis()
             return
         m = next((m for m in O.messages(self.db) if str(m["id"]) == i), None)
         if not m:
@@ -2959,23 +2991,99 @@ class OutreachPage(Page):
         self.cur = m
         self.to.set(m["to_addr"])
         self.subj.set(m["subject"])
+        self.body_t.config(state="normal")      # a disabled box ignores new text: always unlock first
         self.body_t.delete("1.0", "end")
         self.body_t.insert("1.0", m["body"])
         import json as _json
         atts = _json.loads(m.get("attachments") or "[]")
-        self.att_lbl.config(text=("Attached: " + ", ".join(os.path.basename(a) for a in atts)) if atts else "",
-                            fg=MUTED)
+        self.att_lbl.config(text=("📎 Attached: " + ", ".join(os.path.basename(a) for a in atts)) if atts else "",
+                            fg=MUTED, bg=SOFT if atts else CARD)
         if m["status"] in ("failed", "cancelled") and m.get("error"):
             self.att_lbl.config(text=("Why it failed: " if m["status"] == "failed" else "Why skipped: ")
-                                + O.explain_error(m["error"]), fg=RED)
+                                + O.explain_error(m["error"]), fg=RED_DARK, bg=WARN_BG)
         elif m["status"] == "sent" and m.get("sent_at"):
             sig = O.lead_signals(self.db, m["domain"])
             self.att_lbl.config(text="Sent " + m["sent_at"][:16].replace("T", " ") + "".join(
                 f"  ·  {t}" for t, on in (("opened their review", sig["opened"]), ("replied", sig["replied"]),
-                                          ("bounced", sig["bounced"])) if on), fg=GREEN)
+                                          ("bounced", sig["bounced"])) if on), fg=GREEN, bg=SOFT)
         editable = m["status"] in ("draft", "approved", "failed")
-        self.btn_approve.config(state="normal" if m["status"] in ("draft", "failed") else "disabled")
         self.body_t.config(state="normal" if editable else "disabled")
+        self._email_buttons(m["status"])
+        self._att_vis()
+
+    def _att_vis(self):
+        """Show the status strip only when it has something to say."""
+        if self.att_lbl.cget("text"):
+            self.att_lbl.pack(fill="x", pady=(6, 0), before=self.body_t)
+        else:
+            self.att_lbl.pack_forget()
+
+    def _wrap_tabs(self, width):
+        x, row, col = 0, 0, 0
+        for b in self.tab_btns.values():
+            w = b.winfo_reqwidth() + 10
+            if x and x + w > width:
+                row, col, x = row + 1, 0, 0
+            b.grid(row=row, column=col, sticky="w", padx=(0, 10), pady=1)
+            col += 1
+            x += w
+
+    def _email_buttons(self, status):
+        """Only show the buttons that make sense for this email."""
+        for b in (self.btn_approve, self.btn_send1, self.btn_skip, self.btn_save, self.btn_campaign,
+                  self.btn_answer, self.btn_spam):
+            b.pack_forget()
+        if status == "none":
+            return
+        if status == "campaign":
+            self.btn_campaign.pack(side="left")
+            return
+        if status == "reply":
+            self.btn_answer.pack(side="left")
+            self.btn_spam.pack(side="left", padx=6)
+            return
+        if status in ("draft", "approved", "failed"):
+            self.btn_skip.pack(side="left")
+            self.btn_save.pack(side="left", padx=6)
+        if status in ("draft", "failed"):
+            self.btn_approve.pack(side="left", padx=(0, 6))
+        verb = {"failed": "↻  Try again", "sent": "📤  Send again", "cancelled": "📤  Send now"}.get(status, "📤  Send now")
+        self.btn_send1.config(text=verb)
+        self.btn_send1.pack(side="left")
+
+    def _sync_ticks(self):
+        sel = set(self.tree.selection())
+        for k in self.tree.get_children():
+            if k.isdigit():
+                self.tree.set(k, "chk", "☑" if k in sel else "☐")
+        kids = [k for k in self.tree.get_children() if k.isdigit()]
+        self.tree.heading("chk", text="☑" if kids and len(sel) >= len(kids) else "☐")
+
+    def _tick_click(self, e):
+        """Click the box: add/remove that email from the selection (no Ctrl needed)."""
+        if self.tree.identify_column(e.x) != "#1":
+            return
+        i = self.tree.identify_row(e.y)
+        if not i or not i.isdigit():
+            return
+        if i in self.tree.selection():
+            self.tree.selection_remove(i)
+        else:
+            self.tree.selection_add(i)
+        self.tree.focus(i)
+        self._sel_count()
+        return "break"
+
+    def clear_sel(self):
+        self.tree.selection_set(())
+        self._sel_count()
+
+    def toggle_all(self):
+        kids = [k for k in self.tree.get_children() if k.isdigit()]
+        if kids and len(self.tree.selection()) >= len(kids):
+            self.clear_sel()
+        else:
+            self.select_all()
 
     def _sel_ids(self):
         return [int(i) for i in self.tree.selection() if i.isdigit()]
@@ -2985,12 +3093,17 @@ class OutreachPage(Page):
         tab = self.filter.get()
         ok = tab in ("draft", "approved", "failed", "sent", "cancelled")
         verb = {"failed": "Try again", "sent": "Send again"}.get(tab, "Send now")
-        self.btn_send_sel.config(text=f"📤  {verb}: selected ({n})" if n else f"📤  {verb}: pick emails",
+        self.btn_send_sel.config(text=f"📤  {verb} ({n})" if n else f"📤  {verb}",
                                  state="normal" if ok and n else "disabled")
         if ok:
             self.btn_send_sel.pack(side="right")
         else:
             self.btn_send_sel.pack_forget()
+        self.sel_hint.config(text="" if n else "Tick the boxes to pick emails")
+        try:
+            self._sync_ticks()
+        except tk.TclError:
+            pass
 
     def select_all(self):
         kids = [k for k in self.tree.get_children() if k.isdigit()]
@@ -3053,9 +3166,12 @@ class OutreachPage(Page):
         self.body_t.insert("1.0", "\n".join(lines))
         self.body_t.config(state="disabled")
         self.att_lbl.config(text="")
+        self._att_vis()
         if waiting or c["failed"]:
             self.btn_campaign.config(text=f"📤  Review and send ({waiting + c['failed']})")
-            self.btn_campaign.pack(side="left", padx=6)
+            self._email_buttons("campaign")
+        else:
+            self._email_buttons("none")
 
     def save(self, quiet=False):
         if not self.cur or self.cur["status"] not in ("draft", "approved", "failed"):
