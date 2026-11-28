@@ -21,6 +21,7 @@ from urllib.parse import quote, quote_plus
 
 import ai
 import audit as A
+import calls as C
 import outreach as O
 import security as S
 import updater as U
@@ -485,7 +486,7 @@ class App:
         f.bind_all("<Return>", go)
         f.bind("<Destroy>", lambda e: e.widget is f and self.root.unbind_all("<Return>"))
         e1.focus_set()
-        self.root.after(200, e1.focus_force)
+        self.root.after(200, lambda: e1.winfo_exists() and e1.focus_force())
 
     def lock(self):
         if self.job and self.job.is_alive():
@@ -967,7 +968,8 @@ class App:
         self.nav = {}
         items = [("dashboard", "⌂", "Dashboard"), ("find", "⌕", "Find leads"),
                  ("yp", "☰", "Yellow Pages"), ("leads", "★", "Leads"),
-                 ("outreach", "✉", "Outreach"), ("inbox", "⇩", "Inbox"), ("pipeline", "▤", "Pipeline"),
+                 ("outreach", "✉", "Outreach"), ("calls", "☏", "Calls"), ("inbox", "⇩", "Inbox"),
+                 ("pipeline", "▤", "Pipeline"),
                  ("coverage", "▦", "Coverage"), ("settings", "⚙", "Settings")]
         tk.Frame(side, bg=BORDER, height=1).pack(fill="x", padx=18, pady=(0, 10))
         for key, icon, text in items:
@@ -1021,6 +1023,7 @@ class App:
         self.pages = {
             "dashboard": DashboardPage(self), "find": FindPage(self), "yp": YPPage(self),
             "leads": LeadsPage(self), "outreach": OutreachPage(self), "inbox": InboxPage(self),
+            "calls": CallsPage(self),
             "pipeline": PipelinePage(self), "coverage": CoveragePage(self),
             "settings": SettingsPage(self),
         }
@@ -2317,6 +2320,9 @@ class Profile:
                    command=lambda: self.app.contact_dialog([lead["domain"]])).pack(side="left")
         Btn(acts, text="Website",
                    command=lambda: open_url(lead.get("final_url") or lead.get("website"))).pack(side="left", padx=6)
+        if C.phones(lead):
+            Btn(acts, text="📞  Call", style="Dark.TButton",
+                command=lambda: self.app.show("calls", select=lead["domain"])).pack(side="left", padx=(0, 6))
         Btn(acts, text="Call brief", command=self.open_brief).pack(side="left")
         mb = ttk.Menubutton(acts, text="More", width=7)
         menu = tk.Menu(mb, tearoff=0)
@@ -3361,6 +3367,290 @@ class OutreachPage(Page):
 # ---------------------------------------------------------------------------
 # Inbox (your real info@ inbox, read inside the app)
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Calls: you phone, the app gives you the script and does the paperwork
+# ---------------------------------------------------------------------------
+class CallsPage(Page):
+    title = "Calls"
+    subtitle = "Who to ring today, a script for each lead, one click to log it. You make every call yourself."
+
+    def build(self):
+        top = tk.Frame(self.body, bg=BG)
+        top.pack(fill="x", pady=(0, 10))
+        self.stats = tk.Label(top, bg=BG, fg=TEXT, font=F(10, "bold"))
+        self.stats.pack(side="left")
+        self.only_now = tk.BooleanVar(value=False)
+        ttk.Checkbutton(top, text="Only where it's business hours now", variable=self.only_now,
+                        command=self.fill).pack(side="left", padx=16)
+        Btn(top, text="✍  Write top 20 scripts", command=self.write_scripts).pack(side="right")
+
+        pw = ttk.Panedwindow(self.body, orient="horizontal")
+        pw.pack(fill="both", expand=True)
+        lc = card(pw, pad=8)
+        fr, self.tree = make_tree(lc.inner, [("name", "Business", 160), ("phone", "Phone", 112),
+                                             ("why", "Why call", 170), ("when", "Their time", 125)], height=20)
+        fr.pack(fill="both", expand=True)
+        self.tree.tag_configure("now", foreground=TEXT)
+        self.tree.tag_configure("later", foreground=MUTED)
+        self.tree.bind("<<TreeviewSelect>>", self.on_select)
+        pw.add(lc, weight=2)
+
+        rc = card(pw, pad=14)
+        pw.add(rc, weight=3)
+        r = rc.inner
+        head = tk.Frame(r, bg=CARD)
+        head.pack(fill="x")
+        self.h_name = tk.Label(head, bg=CARD, fg=TEXT, font=F(14, "bold"), anchor="w")
+        self.h_name.pack(side="left")
+        tools = tk.Frame(head, bg=CARD)
+        tools.pack(side="right")
+        Btn(tools, text="↻  New script", command=lambda: self.load_script(refresh=True)).pack(side="left")
+        Btn(tools, text="👤  Profile", command=self.profile).pack(side="left", padx=6)
+        Btn(tools, text="Website", command=lambda: self.lead and open_url(
+            self.lead.get("final_url") or self.lead.get("website"))).pack(side="left")
+        prow = tk.Frame(r, bg=CARD)
+        prow.pack(fill="x", pady=(8, 0))
+        self.phone_v = tk.StringVar()
+        self.phone_box = ttk.Combobox(prow, textvariable=self.phone_v, width=18, state="readonly", font=F(12))
+        self.phone_box.pack(side="left")
+        self.btn_call = Btn(prow, text="📞  Call now", style="Primary.TButton", command=self.dial, width=12)
+        self.btn_call.pack(side="left", padx=8)
+        Btn(prow, text="📋  Copy number", command=self.copy_number).pack(side="left")
+        self.h_time = tk.Label(r, bg=CARD, fg=MUTED, font=F(10, "bold"), anchor="w")
+        self.h_time.pack(fill="x", pady=(6, 0))
+        self.h_info = tk.Label(r, bg=CARD, fg=MUTED, font=F(9), anchor="w", justify="left")
+        self.h_info.pack(fill="x", pady=(6, 0))
+
+        # log the call (bottom)
+        log = tk.Frame(r, bg=SOFT, highlightthickness=1, highlightbackground=BORDER)
+        log.pack(side="bottom", fill="x", pady=(10, 0))
+        li = tk.Frame(log, bg=SOFT)
+        li.pack(fill="x", padx=12, pady=10)
+        tk.Label(li, text="How did it go?", bg=SOFT, fg=TEXT, font=F(10, "bold")).grid(row=0, column=0, sticky="w")
+        self.outcome = tk.StringVar(value="")
+        grid = tk.Frame(li, bg=SOFT)
+        grid.grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 6))
+        for i, (k, lab) in enumerate(C.OUTCOMES):
+            ttk.Radiobutton(grid, text=lab, value=k, variable=self.outcome,
+                            command=self._outcome_changed).grid(row=i // 3, column=i % 3, sticky="w", padx=(0, 14))
+        nr = tk.Frame(li, bg=SOFT)
+        nr.grid(row=2, column=0, columnspan=3, sticky="we")
+        li.columnconfigure(0, weight=1)
+        tk.Label(nr, text="Notes", bg=SOFT, fg=MUTED).pack(side="left")
+        self.notes_v = tk.StringVar()
+        ttk.Entry(nr, textvariable=self.notes_v).pack(side="left", fill="x", expand=True, padx=6)
+        self.cb_frame = tk.Frame(nr, bg=SOFT)
+        tk.Label(self.cb_frame, text="Call back on", bg=SOFT, fg=MUTED).pack(side="left")
+        self.cb_v = tk.StringVar()
+        ttk.Entry(self.cb_frame, textvariable=self.cb_v, width=11).pack(side="left", padx=4)
+        br = tk.Frame(li, bg=SOFT)
+        br.grid(row=3, column=0, columnspan=3, sticky="we", pady=(8, 0))
+        self.draft_v = tk.BooleanVar(value=True)
+        ttk.Checkbutton(br, text="Draft a follow-up email for me", variable=self.draft_v).pack(side="left")
+        self.btn_log = Btn(br, text="✓  Save call  →  next", style="Primary.TButton", command=self.save_call)
+        self.btn_log.pack(side="right")
+
+        self.script = tk.Text(r, wrap="word", font=F(11), relief="flat", padx=14, pady=10, width=60,
+                              highlightthickness=1, highlightbackground=BORDER, height=14, spacing1=2, spacing3=2)
+        self.script.pack(fill="both", expand=True, pady=(10, 0))
+        self.script.tag_configure("h", font=F(10, "bold"), foreground=TEAL, spacing1=10)
+        self.script.tag_configure("b", font=F(11))
+        self.script.tag_configure("m", font=F(9), foreground=MUTED)
+        self.rows, self.lead = {}, None
+
+    # ---------- list ----------
+    def refresh(self, select=None, **kw):
+        self.fill(select)
+
+    def fill(self, select=None):
+        self.tree.delete(*self.tree.get_children())
+        self.rows = {}
+        items = C.call_list(self.db)
+        if select and select not in {r["domain"] for r in items}:
+            lead = next((x for x in self.db.lead_records() if x["domain"] == select), None)
+            if lead and C.phones(lead):
+                ok, when = C.good_time(lead)
+                items.insert(0, {"domain": select, "name": lead.get("name") or select, "phone": C.phones(lead)[0],
+                                 "why": "Picked from profile", "when": when, "ok_now": ok})
+        for it in items:
+            if self.only_now.get() and not it["ok_now"]:
+                continue
+            self.rows[it["domain"]] = it
+            self.tree.insert("", "end", iid=it["domain"], tags=("now" if it["ok_now"] else "later",),
+                             values=(it["name"], C.pretty(it["phone"]), it["why"],
+                                     ("✓ " if it["ok_now"] else "") + (it["when"] or "")))
+        st = C.stats_today(self.db)
+        self.stats.config(text=f"To call: {len(self.rows)}   ·   Today: {st['calls']} calls, "
+                               f"{st['talked']} conversations, {st['booked']} interested or booked")
+        kids = self.tree.get_children()
+        target = select if select and self.tree.exists(select) else (kids[0] if kids else None)
+        if target:
+            self.tree.selection_set(target)
+            self.tree.focus(target)
+            self.tree.see(target)
+            self.on_select()
+        else:
+            self._show_empty()
+
+    def _show_empty(self):
+        self.lead = None
+        self.h_name.config(text="Nobody to call right now")
+        self.script.config(state="normal")
+        self.script.delete("1.0", "end")
+        self.script.insert("1.0", "Leads with a phone number show up here once they're Super or Hot, "
+                                  "after you email them, or when they open their free review.", "m")
+        self.script.config(state="disabled")
+
+    def on_select(self, e=None):
+        dom = self.tree.focus()
+        if not dom:
+            return
+        self.lead = next((x for x in self.db.lead_records() if x["domain"] == dom), None)
+        if not self.lead:
+            return
+        it = self.rows.get(dom, {})
+        nums = C.phones(self.lead)
+        self.h_name.config(text=C.clean_name(self.lead))
+        self.phone_box.config(values=[C.pretty(n) for n in nums])
+        self.phone_v.set(C.pretty(nums[0]) if nums else "")
+        ok, when = C.good_time(self.lead)
+        self.h_time.config(text=(("✓ Good time: " if ok else "⚠ Outside business hours: ") + when) if when else "",
+                           fg=GREEN if ok else AMBER)
+        st = (O.get_outreach(self.db, dom) or {}).get("status") or "new"
+        hist = C.history(self.db, dom)
+        last = hist[0] if hist else None
+        info = [f"{W.LEVELS.get(self.lead['level'], (self.lead['level'],))[0]} lead · {O.STATUS_LABELS.get(st, st)}"
+                f" · {self.lead.get('city') or ''} {self.lead.get('region') or ''}".strip(),
+                f"Why call: {it.get('why', '')}"]
+        if last:
+            info.append(f"Last call {last['called_at'][:16].replace('T', ' ')}: "
+                        f"{C.OUTCOME_LABELS.get(last['outcome'], last['outcome'])}"
+                        + (f" — {last['notes']}" if last["notes"] else "") + f"  ({len(hist)} call{'s' if len(hist) > 1 else ''})")
+        self.h_info.config(text="\n".join(info))
+        self.outcome.set("")
+        self.notes_v.set("")
+        self.cb_v.set((dt.date.today() + dt.timedelta(days=2)).isoformat())
+        self._outcome_changed()
+        self.load_script()
+
+    # ---------- script ----------
+    def load_script(self, refresh=False):
+        if not self.lead:
+            return
+        lead = self.lead
+        r = self.db.q("SELECT data, source FROM call_scripts WHERE domain=?", (lead["domain"],))
+        if r and not refresh:
+            return self.show_script(json.loads(r[0][0]), r[0][1])
+        self.script.config(state="normal")
+        self.script.delete("1.0", "end")
+        self.script.insert("1.0", "Writing the call script" + (" with Gemini…" if ai.enabled(self.app.cfg) else "…"), "m")
+        self.script.config(state="disabled")
+
+        def work():
+            try:
+                sc, src = C.get_script(self.db, self.app.cfg, lead, refresh=refresh)
+                self.app.root.after(0, lambda: self.lead and self.lead["domain"] == lead["domain"]
+                                    and self.show_script(sc, src))
+            except Exception as ex:
+                self.app.root.after(0, lambda: self.app.toast(f"Script failed: {ex}"))
+        threading.Thread(target=work, daemon=True).start()
+
+    def show_script(self, sc, src):
+        t = self.script
+        t.config(state="normal")
+        t.delete("1.0", "end")
+        t.insert("end", ("Written by Gemini for this business" if src == "ai" else
+                         "Written from what the bot found on their site (add a Gemini key for a fully custom script)")
+                 + "\n", "m")
+        for h, body in C.script_text(sc):
+            t.insert("end", h.upper() + "\n", "h")
+            t.insert("end", body + "\n", "b")
+        t.config(state="disabled")
+        t.yview_moveto(0)
+
+    def write_scripts(self):
+        doms = list(self.rows)[:20]
+        if not doms:
+            return
+        leads = [x for x in self.db.lead_records() if x["domain"] in set(doms)]
+
+        def work():
+            n = 0
+            for i, lead in enumerate(leads):
+                if W.stopping():
+                    break
+                W.progress(phase="ai", done=i, total=len(leads), label=f"Call script: {lead.get('name') or lead['domain']}")
+                if not self.db.q("SELECT 1 FROM call_scripts WHERE domain=?", (lead["domain"],)):
+                    C.get_script(self.db, self.app.cfg, lead)
+                    n += 1
+            return n
+        self.app.run_job("Writing call scripts", work,
+                         after=lambda n: self.app.toast(f"{n or 0} call scripts written", GREEN))
+
+    # ---------- calling ----------
+    def _digits(self):
+        return re.sub(r"\D", "", self.phone_v.get())[-10:]
+
+    def dial(self):
+        d = self._digits()
+        if len(d) != 10:
+            return
+        ok, when = C.good_time(self.lead or {})
+        if not ok and when and not messagebox.askyesno(
+                "Call now?", f"It's {when}, outside normal business hours. Call anyway?"):
+            return
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(C.tel(d))
+            else:
+                open_url(C.tel(d))
+            self.app.toast(f"Opening your calling app for {C.pretty(d)}… After the call, pick how it went below.")
+        except Exception:
+            self.copy_number()
+            messagebox.showinfo("Call", "No calling app is set up for phone links on this PC, so the number is "
+                                        "copied. Paste it into your calling app (WhatsApp, Viber, Zoom Phone…).")
+
+    def copy_number(self):
+        d = self._digits()
+        if d:
+            self.app.root.clipboard_clear()
+            self.app.root.clipboard_append("+1" + d)
+            self.app.toast(f"Copied +1{d}")
+
+    def _outcome_changed(self):
+        if self.outcome.get() == "call_back":
+            self.cb_frame.pack(side="left", padx=(8, 0))
+        else:
+            self.cb_frame.pack_forget()
+        self.btn_log.config(state="normal" if self.outcome.get() and self.lead else "disabled")
+
+    def save_call(self):
+        if not self.lead or not self.outcome.get():
+            return
+        out = self.outcome.get()
+        cb = self.cb_v.get().strip() if out == "call_back" else None
+        if cb:
+            try:
+                dt.date.fromisoformat(cb)
+            except ValueError:
+                return messagebox.showwarning("Call back", "Use the date format 2026-12-01.")
+        if out == "do_not_call" and not messagebox.askyesno(
+                "Do not contact", "Mark this lead Do not contact? No more calls or emails will go to them."):
+            return
+        r = C.log_call(self.db, self.app.cfg, self.lead, self._digits(), out, self.notes_v.get(), cb,
+                       draft_email=self.draft_v.get())
+        self.app.toast("Saved. " + " · ".join(r["done"]), GREEN)
+        kids = list(self.tree.get_children())
+        cur = self.lead["domain"]
+        nxt = kids[kids.index(cur) + 1] if cur in kids and kids.index(cur) + 1 < len(kids) else None
+        self.fill(nxt)
+
+    def profile(self):
+        if self.lead:
+            self.app.show("leads", select=self.lead["domain"])
+
+
+
 class InboxPage(Page):
     title = "Inbox"
     subtitle = "Your email inbox. Emails from your leads are marked, so you see who really replied."

@@ -1603,7 +1603,8 @@ def check_inbox(db: W.DB, cfg, days: int = 30) -> dict:
 TASK_LABELS = {"review": "Ask for a Google review", "care_plan": "Offer the monthly care / SEO plan",
                "referral": "Ask for a referral",
                "viewed": "🔥 Opened their free review, follow up today",
-               "inquiry": "New inquiry from your website, reply"}
+               "inquiry": "New inquiry from your website, reply",
+               "call_back": "📞 Call back today (they asked)"}
 
 
 def due_tasks(db: W.DB) -> list[tuple]:
